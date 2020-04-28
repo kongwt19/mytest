@@ -1,4 +1,4 @@
-TARGET := soft_gw
+TARGET := libtvgw.so
 
 ZIGBEE		= false
 PLATFORM	= x86_64
@@ -11,7 +11,7 @@ else
 	CC			:= gcc
 endif
 
-CPP_SOURCE := 	$(wildcard ./*.cpp)
+CPP_SOURCE := 	$(wildcard ./src/jni/*.cpp)
 				
 CPP_OBJS := $(patsubst %.cpp,%.o,$(CPP_SOURCE))
 
@@ -38,6 +38,7 @@ endif
 C_OBJS := $(patsubst %.c,%.o,$(C_SOURCE))
 
 INCLUDE :=	-I ./ \
+			-I ./inc/jni \
 			-I ./inc/common \
 			-I ./inc/common/curl \
 			-I ./inc/common/linux \
@@ -56,8 +57,9 @@ INCLUDE :=	-I ./ \
 			-I ./inc/iot_mid_ware/cloud/mqtt/paho-mqtt3c
 
 DEFINES := -DHAVE_CONFIG_H -DLINUX
-CFLAGS := $(DEFINES) $(INCLUDE) -Wall -static
+CFLAGS := $(DEFINES) $(INCLUDE) -Wall -fPIC
 LIBS := -lchcrypto -lpaho-mqtt3a -lpthread -lm
+LDFLAGS := -fPIC -shared
 
 ifeq ($(PLATFORM), arm64)
 	LDFLAGS += -L ./lib/linux/arm_64
@@ -73,7 +75,7 @@ endif
 all:$(TARGET)
 
 $(TARGET):$(CPP_OBJS) $(C_OBJS)
-	$(CXX) -o $@ $^ $(CFLAGS) $(LDFLAGS) $(LIBS)
+	$(CXX) -o $@ $^ $(LDFLAGS) $(LIBS)
 $(CPP_OBJS):%o:%cpp
 	$(CXX) -o $@ -c $<  $(CFLAGS) $(CXX_VER)
 $(C_OBJS):%o:%c
