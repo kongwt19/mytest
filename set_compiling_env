@@ -1,0 +1,34 @@
+#!/bin/sh
+#==================================================#
+#   Set Rexense 7688_32bit compiling environment   #
+#==================================================#
+
+if [ -z $RexenseIsRuned ]
+then
+	echo "Set Rexense 7688_32bit compiling environment variable."
+
+	export COMP_GCC_DIR=/usr/local/arm/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu/bin	
+	export ARCH=ARM
+	export TARGET=aarch64-linux-gnu
+	export STAGING_DIR=$COMP_GCC_DIR	
+	export PATH=$COMP_GCC_DIR:$PATH
+	export CC=aarch64-linux-gnu-gcc
+
+	echo "Rexense 7688_32bit compiling environment variable was set up."
+fi
+
+echo ""
+echo -e "\033[1;33mRexense 7688_32bit Compiling Environment Variable\033[0m"
+echo "-----------------------------------------------------------------------------"
+echo -e "\033[1;32m[COMP_GCC_DIR]:\033[0m"
+echo $COMP_GCC_DIR
+echo "-----------------------------------------------------------------------------"
+echo -e "\033[1;32m[PATH]:\033[0m"
+echo $PATH
+echo "-----------------------------------------------------------------------------"
+echo -e "\033[1;32m[CC]:\033[0m"
+echo $CC
+echo "-----------------------------------------------------------------------------"
+echo ""
+
+export RexenseIsRuned="Yes"
