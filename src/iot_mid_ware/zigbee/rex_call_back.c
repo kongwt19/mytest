@@ -31,7 +31,7 @@
  */
 int call_back_device_join_cb(char *address, unsigned short reporting, char *type, char *model_id)
 {
-	LogI_Prefix("Started reporting join data to the cloud server:\r\n    address = %s\r\n    reporting = %d\r\n    type = %s\r\n    model_id = %s\r\n",
+	LogD_Prefix("Started reporting join data to the cloud server:\r\n    address = %s\r\n    reporting = %d\r\n    type = %s\r\n    model_id = %s\r\n",
 		address, reporting, type, model_id);
 
 	device_join_net_report(address, type);
@@ -49,7 +49,7 @@ int call_back_device_join_cb(char *address, unsigned short reporting, char *type
  */
 int call_back_device_leave_cb(char *address)
 {
-	LogI_Prefix("Started reporting leave data to the cloud server:\r\n    address = %s\r\n", address);
+	LogD_Prefix("Started reporting leave data to the cloud server:\r\n    address = %s\r\n", address);
 
 	device_offline_report(address);
 	
@@ -68,7 +68,7 @@ int call_back_device_leave_cb(char *address)
  */
 int call_back_report_state_data_cb(char *address, unsigned char endpoint_id, unsigned short state_type, char *state)
 {
-	LogI_Prefix("Started reporting state data to the cloud server:\r\n    address = %s\r\n    endpoint_id = %d\r\n    state_type = 0x%04X\r\n    state = %s\r\n",
+	LogD_Prefix("Started reporting state data to the cloud server:\r\n    address = %s\r\n    endpoint_id = %d\r\n    state_type = 0x%04X\r\n    state = %s\r\n",
 		address, endpoint_id, state_type, state);
 
 	device_data_report(address, endpoint_id, state_type, state);
@@ -88,7 +88,7 @@ int call_back_report_state_data_cb(char *address, unsigned char endpoint_id, uns
  */
 int call_back_report_event_data_cb(char *address, unsigned char endpoint_id, unsigned short event_type, char *event)
 {
-	LogI_Prefix("Started reporting event data to the cloud server:\r\n    address = %s\r\n    endpoint_id = %d\r\n    event_type = 0x%04X\r\n    event = %s\r\n",
+	LogD_Prefix("Started reporting event data to the cloud server:\r\n    address = %s\r\n    endpoint_id = %d\r\n    event_type = 0x%04X\r\n    event = %s\r\n",
 		address, endpoint_id, event_type, event);
 
 	device_data_report(address, endpoint_id, event_type, event);

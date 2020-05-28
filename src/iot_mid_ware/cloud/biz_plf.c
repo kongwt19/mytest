@@ -9,23 +9,22 @@
 #include "httpc.h"
 #include "iot_mid_ware.h"
 
-static char g_dev_host[SERVER_HOST_LEN];
-static char g_ser_host[SERVER_HOST_LEN];
-
 static char *g_gettoken 		= "/cdc/token/gettoken";//  
 
 static char *g_alarmonoff 		= "/ippinte/api/alarm/setswitch";
 static char *g_alarmswitch 		= "/ippinte/api/alarm/getswitch";
-static char *g_scenepanel 		= "/ippinte/api/scenepanel/report";
+//static char *g_scenepanel 		= "/ippinte/api/scenepanel/report";
+static char *g_scenepanel_get_point 		= "/ippinte/api/scenepanel/getByPoint";
 
 static HTTP_FUNC_URL_S g_http_uri[] = 
 {
-	{MSG_REPORT_STATUS, 	"/cdc/device/upstatus"},
-	{MSG_CHILD_ONLINE, 		"/cdc/device/slaveonline"},
-	{MSG_CHILD_OFFLINE, 	"/cdc/device/slaveoffline"},
-	{MSG_UPDATE_INFO, 		"/cdc/device/update"},
-	{MSG_ALARM, 			"/ippinte/api/alarm/newreport"},
-	{MSG_REGIST, 			"/cdc/device/register"},
+	{MSG_REPORT_STATUS, 		"/cdc/device/upstatus"},
+	{MSG_MULTI_REPORT_STATUS,	"/cdc/device/multiupstatus"},
+	{MSG_CHILD_ONLINE, 			"/cdc/device/slaveonline"},
+	{MSG_CHILD_OFFLINE, 		"/cdc/device/slaveoffline"},
+	{MSG_UPDATE_INFO, 			"/cdc/device/update"},
+	{MSG_ALARM, 				"/ippinte/api/alarm/newreport"},
+	{MSG_REGIST, 				"/cdc/device/register"},
 };
 
 //加密
@@ -177,6 +176,78 @@ char * parse_token(char * response_json){
 	strcpy(token, token_str);
     cJSON_Delete(json);
     return token;
+}
+
+//get scenepanel list, when deviceList is NULL,* scene_panel_list is NULL
+int  parse_scene_panel_list(char * response_json, char ** scene_panel_list){
+	RETURN_IF_NULL(response_json, GW_NULL_PARAM);
+	
+	* scene_panel_list = NULL;
+	char * response_str = NULL;
+	response_str = strtok(response_json, "\n");
+	if(response_str == NULL)//response_json不包含"\n"
+	{
+		response_str = response_json;
+	}
+	char * decrypt_str = ipp_decrypt((uint8_t *)response_str);
+	if(decrypt_str == NULL) 
+	{
+		LogE_Prefix("%s\n","decrypt err");
+		return GW_ERR;
+	}
+
+    cJSON * json = cJSON_Parse(decrypt_str);
+	FREE_POINTER(decrypt_str);
+	if(json == NULL) 
+    {
+		LogE_Prefix("%s\n","cJSON_Parset err");
+        return GW_ERR;
+    }
+
+	//code
+	cJSON * code_node = cJSON_GetObjectItem(json, "code");
+	if(code_node == NULL)
+	{
+         cJSON_Delete(json);
+	     LogE_Prefix("%s\n","data format error");
+		 return GW_ERR;
+	}
+	char * code = code_node->valuestring;
+	if(strcmp(code, HTTP_REQ_SUCCESS)!=0) 
+	{
+		cJSON_Delete(json);
+		LogE_Prefix("%s\n","response err");
+		return GW_ERR;
+	}
+
+	//scene dev list
+	cJSON * scenelist_node = cJSON_GetObjectItem(json, "scenePointInfo");
+	if(scenelist_node == NULL)
+	{
+         cJSON_Delete(json);
+	     LogE_Prefix("scenePointInfo is NULL\r\n");
+		 return GW_ERR;
+	}
+
+	cJSON * devicelist_node = cJSON_GetObjectItem(scenelist_node, "deviceList");
+	if(devicelist_node == NULL)
+	{
+		 cJSON_Delete(json);
+	     LogE_Prefix("deviceList is NULL\r\n");
+		 return GW_OK;
+	}
+    char * scene_panel_list_str = cJSON_PrintUnformatted(devicelist_node);
+	if(scene_panel_list_str == NULL)
+	{
+         cJSON_Delete(json);
+	     LogE_Prefix("scene panel list str is NULL\r\n");
+		 return GW_ERR;
+	}
+    
+	* scene_panel_list = scene_panel_list_str;
+	
+    cJSON_Delete(json);
+    return GW_OK;
 }
 //得到请求结果后的回调函数
 size_t write_data(char * buffer,size_t size,size_t nmemb,char *stream)
@@ -442,6 +513,50 @@ int ippinte_set_alarm_switch(char *devID, int onoff)
 
     return result;
 }
+
+/*******************get scene panel info***********************
+{"deviceId":"0D6F000D57B76500","point":1}
+******************************************************************/
+int ippinte_scene_panel_get_by_point(char *devid, int point, char ** scene_panel_list)
+{
+	RETURN_IF_NULL(devid, GW_NULL_PARAM);
+	RETURN_IF_NULL(scene_panel_list, GW_NULL_PARAM);
+	char * json_data = NULL;
+	char * response_data = NULL;
+
+	cJSON *root = cJSON_CreateObject();
+	if(root == NULL)
+	{
+		LogE_Prefix("%s\n", "root NULL error");
+		return GW_HTTP_FAIL;
+	}
+
+	cJSON_AddStringToObject(root, "deviceId", devid);
+	cJSON_AddNumberToObject(root, "point", point);
+	
+    json_data = cJSON_PrintUnformatted(root);
+	cJSON_Delete(root);
+	if(json_data == NULL){
+		LogE_Prefix("%s\n", " cJSON_Print return NULL");
+		return GW_HTTP_FAIL;
+	}
+
+	URL_INFO_S url;
+	memset(&url, 0, sizeof(url));
+	get_ippinte_server(url.ip, &url.port);
+	url.uri = g_scenepanel_get_point;
+    response_data = curl_send(&url, json_data);
+	FREE_POINTER(json_data);
+	if(response_data == NULL){
+		LogE_Prefix("%s\n", "curl_send return NULL");
+		return GW_HTTP_FAIL;
+	}
+
+	int result = parse_scene_panel_list(response_data, scene_panel_list);
+	FREE_POINTER(response_data);
+
+    return result;
+}
 #if 0
 //场景
 int ippinte_scene_panel_report(char *info, char *sn, int len)
@@ -628,7 +743,7 @@ int cdc_slave_device_offline(char *slaveId)
     } 	
 }
 ***********************************************************/
-int cdc_dev_report_status(char *sn, char *data_json)
+int cdc_dev_report_status(char *sn, char *data_json, BOOL multi)
 {
 	int ret = GW_ERR;
     char * json_data = NULL;
@@ -674,7 +789,8 @@ int cdc_dev_report_status(char *sn, char *data_json)
 	cJSON_Delete(root);
 	if(NULL != json_data)
 	{
-		ret = http_send_msg(sn, MSG_REPORT_STATUS, json_data, strlen(json_data), TRUE);
+		MSG_TYPE_E msg_type = (TRUE == multi)?MSG_MULTI_REPORT_STATUS:MSG_REPORT_STATUS;
+		ret = http_send_msg(sn, msg_type, json_data, strlen(json_data), TRUE);		
 		FREE_POINTER(json_data);
 	}
 
@@ -766,7 +882,8 @@ int cdc_regist(DEV_INFO_S *dev)
 	cJSON_Delete(root);
 	if(NULL != json_data)
 	{
-		ret = http_send_msg(dev->sn, MSG_REGIST, json_data, strlen(json_data), FALSE);
+		BOOL async_msg = (TRUE == dev->is_master)?FALSE:TRUE;
+		ret = http_send_msg(dev->sn, MSG_REGIST, json_data, strlen(json_data), async_msg);
 		FREE_POINTER(json_data);
 	}
 
@@ -844,21 +961,6 @@ int cdc_update(DEV_INFO_S *dev)
     return ret;
 }
 
-void set_cdc_ippinte_server(char *cdc_ip, short cdc_port, char *ippinte_ip, short ippinte_port)
-{
-	RETURN_VOID_IF_NULL(cdc_ip);
-	RETURN_VOID_IF_NULL(ippinte_ip);
-	
-	memset(g_dev_host, 0, sizeof(g_dev_host));
-	memset(g_ser_host, 0, sizeof(g_ser_host));
-
-	snprintf(g_dev_host, sizeof(g_dev_host), "http://%s:%d", cdc_ip, cdc_port);
-	snprintf(g_ser_host, sizeof(g_ser_host), "http://%s:%d", ippinte_ip, ippinte_port);
-
-	LogI_Prefix("Cdc server:%s\r\n", g_dev_host);
-	LogI_Prefix("Ippinte server:%s\r\n", g_ser_host);
-}
-
 int http_send(char *sn, MSG_TYPE_E msg_type, char *content, int content_len)
 {
 	int ret = GW_ERR;
@@ -866,7 +968,7 @@ int http_send(char *sn, MSG_TYPE_E msg_type, char *content, int content_len)
 	unsigned int i = 0;
 	URL_INFO_S url;
 
-	for(i = 0;i < sizeof(g_http_uri)/sizeof(g_http_uri[0]);i ++)
+	for(i = 0;i < sizeof(g_http_uri)/sizeof(g_http_uri[0]); i++)
 	{
 		if(msg_type == g_http_uri[i].type)
 		{

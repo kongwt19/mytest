@@ -10,6 +10,7 @@
 #include <sys/un.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <linux/types.h>
 #include <linux/netlink.h>
 #include <arpa/inet.h>
@@ -20,19 +21,40 @@
 #include <dirent.h>
 #include <errno.h> 
 #include <fcntl.h>
+#include <time.h>
 
 
-#define UART_REV_LEN	512
+#define UART_REV_LEN					512
 
 static USB_PORT_CHECK usb_port_cb = NULL;
 
+/**
+ * get_ssecond
+ * 获取系统时间函数
+ * return: 0成功,否则-1
+ * note: none
+ */
+uint32_t get_ssecond(void)
+{
+    time_t t;
+    uint32_t stamp;
+    t = time(NULL);
+    stamp = time(&t);
+    return stamp;
+}
 
+/**
+ * reg_usb_port_callback
+ * 注册usb检测回调函数
+ * return: 0成功,否则-1
+ * note: none
+ */
+#ifndef REX_ENABLE
 void reg_usb_port_callback(USB_PORT_CHECK cb)
 {
 	usb_port_cb = cb;
 }
-
-
+#endif
 /**
  * uart_set
  * 串口设置函数
@@ -220,7 +242,6 @@ static int uart_open(char *name)
 	int iBaudRate, iDataSize, iStopBit;
 	char cParity;
 	int fd = -1;
-    char path_name[20];
 
     if(NULL == strstr(name, "ttyUSB"))
     {
@@ -228,10 +249,8 @@ static int uart_open(char *name)
         return -1;
     }
 
-    memset(path_name, 0, 20);
-    snprintf(path_name, sizeof(path_name), "/dev/%s", name);
-    LogD_Prefix("uart_open:path_name is %s\n",path_name);
-	fd = open(path_name, O_RDWR|O_NDELAY);
+    LogD_Prefix("uart_open:path_name is %s\n", name);
+	fd = open(name, O_RDWR|O_NDELAY);
 	if(fd == -1)
 	{
 		LogE_Prefix("uart_open error\n");
@@ -272,22 +291,21 @@ int check_uart_type(char *name)
     int ret = 0;
     uint8_t cmd[6] = {0x41, 0x54, 0x2B, 0x56, 0x45, 0x52};
     uint8_t buf[20];
-	char *p = name;
     
     sleep_ms(1 * 100);
-    
-    fd = uart_open(p);
+    LogD_Prefix("uart name is %s \n", name);
+    fd = uart_open(name);
     if(0 > fd)
     {
 		sleep_ms(1 * 100);
-		fd = uart_open(p);
+		fd = uart_open(name);
 		if(0 > fd)
 		{
-			LogE_Prefix("Open serial port %s is failed\r\n", p);
+			LogE_Prefix("Open serial port %s is failed\r\n", name);
 	        return GW_ERR;
 		}
 	}
-    LogD_Prefix("check_uart_type:Open serial port  %s is succeed， fd = %d\r\n", p, fd);
+    LogD_Prefix("check_uart_type:Open serial port  %s is succeed， fd = %d\r\n", name, fd);
 
     ret = write(fd, cmd, sizeof(cmd));
     if(0 < ret)
@@ -298,10 +316,9 @@ int check_uart_type(char *name)
 		LogD_Prefix("rev_ret %d\r\n",ret);
 		if(0 < ret)
 		{
-            LogD_Prefix("rev_buf is %s\r\n", buf);
 			if(0x52 == buf[2] && 0x45 == buf[3])
 			{
-				LogD_Prefix("%s is a dongle\r\n", name);
+				LogI_Prefix("%s is a dongle\r\n", name);
 				close(fd);
 				return GW_OK;
 			}
@@ -341,60 +358,63 @@ char *read_uart_dev(void)
     	if(NULL != strstr(dp->d_name, "ttyUSB"))
     	{
     		LogD_Prefix("Find com: %s\n", dp->d_name);
-    		if(0 <= check_uart_type(dp->d_name))
+    		int dp_len = sizeof(dp->d_name);
+        	ptr = (char *)malloc(dp_len);
+            MALLOC_ERROR_RETURN_WTTH_RET(ptr, NULL);
+            memset(ptr, 0, dp_len);
+            snprintf(ptr, dp_len, "/dev/%s", dp->d_name);
+    		if(0 <= check_uart_type(ptr))
             {
-            	int dp_len = strlen(dp->d_name) + 10;
-            	ptr = (char *)malloc(dp_len);
-                if(NULL == ptr)
-                {
-                	FREE_POINTER(ptr);
-                    return NULL;
-                }
-                memset(ptr, 0, sizeof(dp_len));
-                snprintf(ptr, dp_len, "/dev/%s", dp->d_name);
                 LogD_Prefix("check uart is ok: %s\n", ptr);
-                break;
+                report_gw_status();
+                return ptr;
+            }
+            else
+            {
+            	LogD_Prefix("check uart is fail\n");
+            	return NULL;
             }
     	}
     }
-	
-	return ptr;
+
+    return NULL;
 }
 
 /**
  * usb_dev_query
  * 查询usb是否存在函数
- * return: 0创建网络,否则-1
+ * return: 0存在,否则-1
  * note: none
  */
+#ifndef REX_ENABLE
 int usb_dev_query(void)
 {
-	char *names = NULL;
-	
-	rex_end();
-	names = read_uart_dev();
-	if(names)
-	{
-		if(init_rex_sdk(names))
-		{
-			FREE_POINTER(names);
-			LogD_Prefix("start rex sdk is success \r\n");
-			return GW_OK;
-		}
-		else
-		{
-			LogD_Prefix("checking the usb is fail \r\n");
-			return GW_ERR;
-		}
-	}
-	else
-	{
-		LogD_Prefix("checking the usb is not exist \r\n");
-	}
-	
-	return GW_NULL_PARAM;
-}
+	DIR *fd = NULL;
+	const char *dir = "/dev/";
+    char path[101] = {0};
+	struct dirent *dp = NULL;
 
+	memcpy(path, dir, strlen(dir));
+
+	fd = opendir(path);
+	if(NULL == fd)
+    {
+		LogE_Prefix("open dir failed! dir: %s\n", path);
+        return GW_ERR;
+    }
+
+    for(dp = readdir(fd); NULL != dp; dp = readdir(fd))
+    {
+    	if(NULL != strstr(dp->d_name, "ttyUSB"))
+    	{
+    		LogD_Prefix("Find com: %s\n", dp->d_name);
+    		return GW_OK;
+    	}
+    }
+	
+	return GW_ERR;
+}
+#endif
 /**
  * read_uart_dev
  * usb插入检测函数
@@ -420,13 +440,17 @@ int add_uart_check(char *buf)
 		{
 			snprintf(path_name, 20, "/dev/%s", start);
 			LogD_Prefix("add_uart_check:usb path_name: %s\n", path_name);
-			if(GW_OK == check_uart_type(start))
+			if(GW_OK == check_uart_type(path_name))
 			{
 				if(NULL != usb_port_cb)
 				{
-					LogD_Prefix("=============usb add =============\n");
+					LogI_Prefix("=============usb add =============\n");
 					usb_port_cb(USB_ADD);
 				}
+				report_gw_status();
+#ifndef REX_ENABLE
+				init_rex_sdk(path_name);
+#endif
 				return GW_OK;
 			}
 			else
@@ -462,9 +486,10 @@ int remove_uart_check(char *buf)
 			LogD_Prefix("add dev_str msg end: %s\n", end);
 			if(NULL != usb_port_cb)
 			{
-				LogD_Prefix("============= usb remove =============\n");
+				LogI_Prefix("============= usb remove =============\n");
 				usb_port_cb(USB_REMOVE);
 			}
+			report_gw_status();
 		}
 	}
 	
@@ -479,11 +504,16 @@ int remove_uart_check(char *buf)
  */
 void *uart_dev_check_fnc(void *arg)
 {
+	fd_set fds;
+	 struct timeval timeout;
 	int com_fd  = -1;
 	int rev_len = 0;
 	char buf[UART_REV_LEN];
 
 	char *uart_name = NULL;
+
+	timeout.tv_sec = 0;
+    timeout.tv_usec = 500000;
 
 	com_fd = init_uart_sock();
 	if(0 > com_fd)
@@ -492,21 +522,21 @@ void *uart_dev_check_fnc(void *arg)
 		return NULL;
 	}
 	
-restart:	
 	uart_name = read_uart_dev();
 	if(NULL != uart_name)
 	{
 		LogD_Prefix("rex sdk is start uart path name is: %s\n", uart_name);
+#ifndef REX_ENABLE
 		if(GW_OK == init_rex_sdk(uart_name))
 		{
-			LogD_Prefix("========rex sdk start is ok======== \n");
+			LogI_Prefix("========rex sdk start is ok======== \n");
 			FREE_POINTER(uart_name);
 		}
 		else
 		{
 			LogE_Prefix("rex sdk start is fail\n");
-			goto restart;
 		}
+#endif
 	}
 	else
 	{
@@ -515,26 +545,41 @@ restart:
 
 	while(1)
 	{
-		memset(buf, 0, sizeof(buf));
-		rev_len = recv(com_fd, buf, sizeof(buf), 0);
-        if(0 < rev_len)
-        {
-        	LogD_Prefix("recv usb msg: %s\n", buf);
-			if(strstr(buf, "add"))
+
+		set_network_sta();
+		
+		FD_ZERO(&fds);//描述符集合初始化
+		FD_SET(com_fd, &fds);
+
+		switch(select(com_fd + 1, &fds, NULL, NULL, &timeout))
+		{
+			case -1:
+				continue;
+			case 0:
+				continue;
+			default:
 			{
-				if(GW_OK == add_uart_check(buf))
+				memset(buf, 0, sizeof(buf));
+				rev_len = recv(com_fd, buf, sizeof(buf), 0);
+				if(0 < rev_len)
 				{
-					goto restart;
+					LogD_Prefix("recv usb msg: %s\n", buf);
+					if(strstr(buf, "add"))
+					{
+						add_uart_check(buf);
+					}
+					else if(strstr(buf, "remove"))
+					{
+						remove_uart_check(buf);
+					}
 				}
+				continue;
 			}
-			else if(strstr(buf, "remove"))
-			{
-				remove_uart_check(buf);
-			}
-        }
+		}
 	}
 
 	close(com_fd);
+	FD_CLR(com_fd, &fds);
 	
 	return NULL;
 }
@@ -545,6 +590,7 @@ restart:
  * return: 0成功,否则-1
  * note: none
  */
+#ifndef REX_ENABLE
 int init_rex(void)
 {
 	pthread_attr_t rex_attr;
@@ -556,7 +602,7 @@ int init_rex(void)
 	
 	return GW_OK;
 }
-
+#endif
 
 
 

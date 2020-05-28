@@ -5,6 +5,7 @@
 #include "rex_common.h"
 #include "dev_cfg.h"
 #include "gw_service.h"
+#include "biz_plf.h"
 
 static DEV_INFO_S gw_info;
 static DEV_LIST_MNG_S dev_list_mng;
@@ -17,6 +18,36 @@ void dev_list_lock(void)
 void dev_list_unlock(void)
 {
 	pthread_mutex_unlock(&dev_list_mng.dev_list_mutex);
+}
+
+/**
+* Update the device data to list
+* @param dev
+* @return 
+*/
+int update_dev(DEV_INFO_S *dev)
+{
+	int ret = GW_ERR;
+	DEV_NODE_S *node = NULL;
+
+	RETURN_IF_NULL(dev, GW_NULL_PARAM);
+
+	dev_list_lock();
+	if(!list_empty(&dev_list_mng.dev_list_head))
+	{
+		list_for_each_entry(node, &dev_list_mng.dev_list_head, dev_head)
+		{
+			if(!strcmp(node->dev_info.sn, dev->sn))
+			{
+				memcpy(&node->dev_info, dev, sizeof(DEV_INFO_S));
+				LogI_Prefix("Up device(%s) data in list, %d in list\n", dev->sn, dev_list_mng.dev_num);
+				ret = GW_OK;
+			}
+		}
+	}
+	dev_list_unlock();
+	
+	return ret;
 }
 
 
@@ -40,7 +71,7 @@ int add_dev(DEV_INFO_S *dev, BOOL save_file)
 		{
 			if(!strcmp(node->dev_info.sn, dev->sn))
 			{
-				memcpy(&node->dev_info, dev, sizeof(DEV_INFO_S));
+				//memcpy(&node->dev_info, dev, sizeof(DEV_INFO_S));
 				LogI_Prefix("Modify device(%s) in list, %d in list\n", dev->sn, dev_list_mng.dev_num);
 				ret = GW_OK;
 				exists = TRUE;
@@ -70,7 +101,7 @@ int add_dev(DEV_INFO_S *dev, BOOL save_file)
 				}
 				memcpy(&node->dev_info, dev, sizeof(DEV_INFO_S));
 				list_add(&node->dev_head, &dev_list_mng.dev_list_head);
-				dev_list_mng.dev_num ++;
+				
 				switch(node->dev_info.conn_type)
 				{
 					case CONN_TYPE_ZIGBEE:
@@ -85,6 +116,7 @@ int add_dev(DEV_INFO_S *dev, BOOL save_file)
 					default:
 						break;
 				}
+				dev_list_mng.dev_num  = dev_list_mng.zigbee_num + dev_list_mng.ble_num;
 				LogI_Prefix("Add device(%s) to list, %d in list\n", dev->sn, dev_list_mng.dev_num);
 				ret = GW_OK;
 				
@@ -125,7 +157,21 @@ int del_dev(char *sn)
 			{
 				del_dev_info(sn,node,&dev_list_mng.dev_list_head);
 				list_del(&node->dev_head);
-				dev_list_mng.dev_num --;
+				switch(node->dev_info.conn_type)
+				{
+					case CONN_TYPE_ZIGBEE:
+						dev_list_mng.zigbee_num --;
+						break;
+					case CONN_TYPE_WIFI:
+						dev_list_mng.wifi_num --;
+						break;
+					case CONN_TYPE_BLE:
+						dev_list_mng.ble_num --;
+						break;
+					default:
+						break;
+				}
+				dev_list_mng.dev_num  = dev_list_mng.zigbee_num + dev_list_mng.ble_num;
 				FREE_POINTER(node->dev_snapshot);
 				FREE_POINTER(node);
 				LogI_Prefix("Del device(%s) from list, %d in list\n", sn, dev_list_mng.dev_num);
@@ -302,6 +348,65 @@ int get_dev_list(CONN_TYPE_E conn_type, DEV_INFO_S **dev_list, int *dev_num)
 
 	return ret;
 }
+/**
+* Copy a dev list from manager with type
+* @param 
+* @return 
+*/
+int get_type_list(uint16_t type, DEV_INFO_S **type_list, int *type_num)
+{
+	int i = 0;
+	int ret = GW_ERR;
+	DEV_NODE_S *node = NULL;
+	DEV_INFO_S *devs = NULL;
+	int num = 0;
+	
+	RETURN_IF_NULL(type_list, GW_NULL_PARAM);
+	RETURN_IF_NULL(type_num, GW_NULL_PARAM);
+	
+	dev_list_lock();
+	num = get_type_num(type);
+	if(0 != num)
+	{  
+		devs = (DEV_INFO_S *)malloc(sizeof(DEV_INFO_S) * num);
+		if(NULL != devs)
+		{
+			memset(devs, 0, sizeof(DEV_INFO_S) * num);
+			list_for_each_entry(node, &dev_list_mng.dev_list_head, dev_head)
+			{
+				if(type == node->dev_info.child_info.zigbee.type)
+				{
+					memcpy(devs + i, &node->dev_info, sizeof(DEV_INFO_S));
+					i ++;
+				}
+			}
+			ret = GW_OK;
+			*type_list = devs;
+			*type_num = num;
+		}
+	}
+	dev_list_unlock();
+
+	return ret;
+}
+/**
+* Count the number of a zigbee type 
+* @param type, refer to @uint16_t
+* @return 
+*/
+int get_type_num(uint16_t type)
+{
+	int type_num = 0;
+	DEV_NODE_S *node = NULL;
+	list_for_each_entry(node, &dev_list_mng.dev_list_head, dev_head)
+	{
+		if(type == node->dev_info.child_info.zigbee.type)
+		{
+			type_num ++;
+		}
+	}
+	return type_num;	
+}
 
 /**
 * Count the child number of a connection type 
@@ -364,33 +469,33 @@ void *offline_check(void *arg)
 		if(!list_empty(&dev_list_mng.dev_list_head))
 		{
 			list_for_each_entry(nd, &dev_list_mng.dev_list_head, dev_head)
-			{
-				//if(&nd->dev_head == dev_list_mng.dev_list_head)
-				//{
-					//break;
-				//}
+			{				
 	            if(nd->dev_info.overtime > 0)
 	            {
 	    		    nd->dev_info.overtime -= 1;
 					//LogD_Prefix("the device id is %016lX,offline count= %d\r\n", nd->dev_info.child_info.zigbee.long_addr,nd->dev_info.overtime);
 	            }
-	        	if (nd->dev_info.overtime == 0)
-	            {
-	        		LogD_Prefix("the device id is %016lX\r\n", nd->dev_info.child_info.zigbee.long_addr);
-					memset(sn, 0, SN_LEN);
-					agent_strncpy(sn, nd->dev_info.sn, strlen(nd->dev_info.sn));
-					continue;
-					//dev_offline(sn);
-					
-	        	}
+				
+				if(nd->dev_info.child_info.zigbee.type!= DEV_GATEWAY)
+				{
+		        	if (nd->dev_info.overtime == 0 && nd->dev_info.offline_flag == 0)
+		            {
+		        		LogD_Prefix("the device id is %016lX\r\n", nd->dev_info.child_info.zigbee.long_addr);
+						memset(sn, 0, SN_LEN);
+						agent_strncpy(sn, nd->dev_info.sn, strlen(nd->dev_info.sn));
+						//nd->dev_info.offline_flag =1;
+						break;
+		        	}
+				}
             }
         }
 
 		dev_list_unlock();
-		if(strlen(sn)!=0)
-		{
+		if(strlen(sn)!=0 && NULL != nd)
+		{	
+			nd->dev_info.offline_flag =1;
 			LogD_Prefix("A device is offline, the device sn is %s\r\n", sn);
-			dev_offline(sn);
+			cdc_slave_device_offline(sn);
 			memset(sn, 0, SN_LEN);
 		}
 		
@@ -437,8 +542,40 @@ int init_dev_list(int size)
 	return GW_OK;
 }
 
-int deinit_dev_list()
+int reinit_dev_list(void)
 {
+	DEV_NODE_S *node = NULL;
+	LogI_Prefix("Start deinit_dev_list\n");
+	dev_list_lock();
+	
+	if(!list_empty(&dev_list_mng.dev_list_head))
+	{
+		LogI_Prefix(" dev_list_mng.dev_num is %d\n", dev_list_mng.dev_num);
+		for(int i = 0; i < dev_list_mng.dev_num; i++)
+		{
+			list_for_each_entry(node, &dev_list_mng.dev_list_head, dev_head)
+			{
+				if(DEV_GATEWAY!=node->dev_info.child_info.zigbee.type)
+				{
+					ctl_dev_clear_net(node->dev_info.sn);
+				}
+				list_del(&node->dev_head);
+				FREE_POINTER(node->dev_snapshot);
+				FREE_POINTER(node);
+				break;
+			}
+		}
+		dev_list_mng.dev_num = 0;
+		dev_list_mng.zigbee_num = 0;
+		dev_list_mng.ble_num = 0;
+		dev_list_mng.wifi_num = 0;
+		LogI_Prefix("Deinit_dev_list is ok\n");
+	}
+	else
+	{
+		LogI_Prefix("Dev list is empty\n");
+	}
+	dev_list_unlock();
 	return GW_OK;
 }
 

@@ -57,6 +57,7 @@ typedef struct _devInfo
 	CHILD_INFO_U child_info;
 	int overtime;
 	int maxtime;
+	int offline_flag;
 }DEV_INFO_S;
 
 typedef struct _devNode
@@ -121,6 +122,18 @@ int get_dev_list(CONN_TYPE_E conn_type, DEV_INFO_S **dev_list, int *dev_num);
 */
 int get_child_num(CONN_TYPE_E child_type);
 /**
+* Copy a dev list from manager with type
+* @param 
+* @return 
+*/
+int get_type_list(uint16_t type, DEV_INFO_S **type_list, int *type_num);
+/**
+* Count the number of a zigbee type 
+* @param type, refer to @uint16_t
+* @return 
+*/
+int get_type_num(uint16_t type);
+/**
 * Set gateway information 
 * @param gw, refer to @DEV_INFO_S
 * @return 
@@ -138,6 +151,18 @@ DEV_INFO_S *get_gw_info(void);
 * @return 
 */
 int init_dev_list(int size);
+/**
+* Update the device data to list
+* @param dev
+* @return 
+*/
+int update_dev(DEV_INFO_S *dev);
+/**
+* reset the device list
+* @param dev
+* @return 
+*/
+int reinit_dev_list(void);
 
 #ifdef __cplusplus
 }

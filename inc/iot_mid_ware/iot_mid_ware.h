@@ -1,6 +1,10 @@
 #ifndef __IOT_MID_WARE_H__
 #define __IOT_MID_WARE_H__
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "dev_mng.h"
 
 #define MAX_CONN_TYPE_SUPPORT   5
@@ -32,6 +36,10 @@ void get_ippinte_server(char *ip, short *port);
 int init_iot_mid_ware(void);
 
 int deinit_iot_mid_ware(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif/*__IOT_MID_WARE_H__*/
 

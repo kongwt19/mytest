@@ -3,9 +3,7 @@
 
 #include "platform.h"
 #include "mqtt.h"
-#include "pthread.h"
 #include "iot_mid_ware.h"
-#include "dev_mng.h"
 #include "biz_plf.h"
 
 // only for while cycle;
@@ -22,18 +20,7 @@ memset(ptr , 0 , size )
 
 #define QUEUE_IS_FULL(q)     ((((q)->head+1)%PUBLISH_QUEUE_SIZE) == (q)->tail)
 #define QUEUE_IS_EMPTY(q)    ((q)->head == (q)->tail)
-
-static BOOL quit(MqttQuitNow * f)
-{
-    if(f)
-    {
-        return (*f)();
-    }
-    else
-    {
-        return FALSE;
-    }
-}
+#define RETAIN     FALSE
 
 /* flash is not enough, NO CERT */
 #define HEART_BEAT_INTERVAL  30      
@@ -41,13 +28,19 @@ static BOOL quit(MqttQuitNow * f)
 
 static char *linker_sn = NULL;
 static int   linker_sn_len =  0;
+static char *clientId = NULL;
+static char *username = NULL;
+static char *password = NULL;
+static char *subscribedTopic = NULL;
+static char *host     = NULL;
+static short port     = 0;
 static int  isLinkerClosed = 0;
 
 static const int QOS_reportStatus = 1;
 static const int QOS_msgReceipt   = 1;
 static const int QOS_msgMissing   = 1;
 
-int_t g_msgid = 0;
+volatile MQTTAsync_token deliveredtoken;
 
 static char *msgReceiptTopic = NULL;
 static char *devStatusTopic  = NULL;
@@ -58,35 +51,7 @@ static pthread_t mqtt_pid;
 //need get token
 char *g_mqttToken = NULL;
 
-typedef struct
-{
-	BOOL    retain;
-    char    qos;
-    short   payload_size;
-    char  * payload;
-    char  * topic;
-}PublishMsg;
-
-
-typedef struct
-{
-    PublishMsg queue[PUBLISH_QUEUE_SIZE];
-    unsigned char       head;
-    unsigned char       tail;
-}PublishQueue;
-
-
-typedef struct SdkContextTag
-{
-	MQTTAsync    client;
-    //Network       network;
-    PublishQueue  queue;
-    MqttSdkInit  *pInitParam;
-}SdkContext;
-
-static SdkContext sdk_context = {0};
-static pthread_mutex_t      mutex;
-
+static MQTTAsync client;
 
 static  int startTime = 0;
 static  int endTime = 0;
@@ -131,72 +96,45 @@ BOOL mqtt_quit(void)
         return FALSE;
 }
 
-int sendout(char * topic, char * payload, int payloadsize, int qos, BOOL retain)
+void onDisconnect(void* context, MQTTAsync_successData* response)
 {
-    return MQTTAsync_send(sdk_context.client, topic, payloadsize, payload, qos, retain, NULL);
+	LogI_Prefix("mqtt successful disconnection\n");
 }
 
-static void enqueue(PublishQueue * queue, char * topic, char * payload, int payloadsize, int qos, BOOL retain)
-{
-    int h = queue->head;
 
-    pthread_mutex_lock(&mutex);
-    queue->queue[h].topic = topic;
-    queue->queue[h].payload = payload;
-    queue->queue[h].payload_size = payloadsize;
-    queue->queue[h].qos = qos;
-    queue->queue[h].retain = retain;
-    queue->head = (h+1)%PUBLISH_QUEUE_SIZE;
-    pthread_mutex_unlock(&mutex);
+void onSubscribe(void* context, MQTTAsync_successData* response)
+{
+	LogI_Prefix("mqtt subscribe succeeded\n");
 }
 
-static PublishMsg * peekqueue(PublishQueue * queue)
+void onSubscribeFailure(void* context, MQTTAsync_failureData* response)
 {
-    return &queue->queue[queue->tail];
+	LogI_Prefix("mqtt subscribe failed, rc %d\n", response ? response->code : 0);
 }
 
-static void dequeue(PublishQueue * queue)
+
+void onConnectFailure(void* context, MQTTAsync_failureData* response)
 {
-	pthread_mutex_lock(&mutex);
-    queue->tail = (queue->tail+1)%PUBLISH_QUEUE_SIZE;
-    pthread_mutex_unlock(&mutex);
+	LogI_Prefix("mqtt connect failed, rc %d\n", response ? response->code : 0);
 }
 
-static BOOL process_pub_queue()
-{
-    BOOL rc = TRUE;
-    PublishQueue * que = &sdk_context.queue;
-    PublishMsg * p;
-    while(QUEUE_IS_EMPTY(que) == FALSE)
-    {
-        p = peekqueue(que);
-        if( sendout(p->topic, p->payload, p->payload_size, p->qos, p->retain) == 0 )
-        {
-        	msg_published(p->topic, p->payload);
-            dequeue(que);
-        }
-        else
-        {
-            rc = FALSE;
-            break;
-        }
-    }
-    return rc;
-}
 
-BOOL emqtt_send(char * topic, char * payload, int payloadsize, int qos, BOOL retain)
+void onConnect(void* context, MQTTAsync_successData* response)
 {
-    PublishQueue * queue = &sdk_context.queue;
+	MQTTAsync client_rec = (MQTTAsync)context;
+	MQTTAsync_responseOptions opts = MQTTAsync_responseOptions_initializer;
+	int rc;
 
-    if( QUEUE_IS_FULL(queue) )
-    {
-        return FALSE;
-    }
-    else
-    {
-        enqueue(queue, topic, payload, payloadsize, qos, retain);
-        return TRUE;
-    }
+	opts.onSuccess = onSubscribe;
+	opts.onFailure = onSubscribeFailure;
+	opts.context = client_rec;
+	deliveredtoken = 0;
+
+	if ((rc = MQTTAsync_subscribe(client_rec, subscribedTopic, QOS_msgReceipt, &opts)) != MQTTASYNC_SUCCESS)
+	{
+		LogE_Prefix("mqtt failed to start subscribe, return code %d\n", rc);
+	}
+	LogI_Prefix("mqtt successful subscribed to topic %s\n", subscribedTopic);
 }
 
 int ipp_mqtt_send(IPP_MSG *ippMqtt, char *publishTopic, int qos)
@@ -214,13 +152,11 @@ int ipp_mqtt_send(IPP_MSG *ippMqtt, char *publishTopic, int qos)
         return GW_ERR;
     }
 
-	LogI_Prefix("MQTT send msg\r\n");
-
-	memset( &mqtt_buffer, 0, sizeof(mqtt_buffer) );
+	memset(&mqtt_buffer, 0, sizeof(mqtt_buffer));
     put_ipp_msg_buffer(ippMqtt, &mqtt_buffer);
 
 	payload_size = mqtt_buffer.current;
-	payload = malloc(payload_size );
+	payload = (uint8_t *)malloc(payload_size );
 	if ( NULL == payload )
 	{
 		LogE_Prefix("ERROR: payload malloc failed\r\n");
@@ -232,7 +168,7 @@ int ipp_mqtt_send(IPP_MSG *ippMqtt, char *publishTopic, int qos)
 
 	mqtt_cleanup_buffer(&mqtt_buffer);
 
-	encrypt=malloc( (payload_size+1) * sizeof(uint8_t));
+	encrypt=(uint8_t *)malloc( (payload_size+1) * sizeof(uint8_t));
 
 	if ( NULL == encrypt )
 	{
@@ -251,13 +187,14 @@ int ipp_mqtt_send(IPP_MSG *ippMqtt, char *publishTopic, int qos)
 	FREE_POINTER(payload);
     LogI_Prefix("encrypt: %s,encrypt_len: %d\r\n",encrypt,encrypt_len);
 
-	if( emqtt_send(publishTopic, (char *)encrypt, encrypt_len , qos, FALSE) < 0 )
+	if ( MQTTAsync_send(client, publishTopic, encrypt_len, (char *)encrypt, qos, RETAIN, NULL) < 0 )
     {
         LogI_Prefix("send message fail, queue is full\r\n");
-        free(encrypt);
+        FREE_POINTER(encrypt);
 		return GW_ERR;
     }
-
+	LogI_Prefix("msg of %s has been sent, free its payload memory 0x%x\r\n", encrypt, (unsigned int)(long)encrypt);
+	FREE_POINTER(encrypt);
 	return GW_OK;
 }
 
@@ -278,17 +215,23 @@ int msg_arrived(void* context, char* topicName, int topicLen, MQTTAsync_message*
 	LogI_Prefix("===============MQTT Recieved MSG===============\r\n");
 
 	decrypt_len = m->payloadlen;
-	decrypt = malloc(decrypt_len );
+	decrypt = (uint8_t *)malloc(decrypt_len );
 
 	if ( NULL == decrypt )
 	{
 		LogE_Prefix("ERROR: payload malloc failed\r\n");
 		return GW_ERR;
 	}
-	strncpy((char *)decrypt, m->payload, m->payloadlen);
-	LogI_Prefix("recv origi msg is: %s\r\n", decrypt);
+	strncpy((char *)decrypt, (const char *)m->payload, m->payloadlen);
+	LogI_Prefix("recv msg is: %s\r\n", decrypt);
 
-	result = malloc( (decrypt_len+1) * sizeof(uint8_t) );
+	result = (uint8_t *)malloc( (decrypt_len+1) * sizeof(uint8_t) );
+	if(NULL == result)
+	{
+		FREE_POINTER(decrypt);
+		LogE_Prefix("%s-%d:NULL pointer, return!\r\n",    __func__, __LINE__);
+		return GW_ERR;
+	}
 	memset(result, 0,  ressult_len);
 
 	if( -1 == ipp_aes_decrypt(decrypt, decrypt_len, &result, &ressult_len, &aes_format)  )
@@ -311,7 +254,7 @@ int msg_arrived(void* context, char* topicName, int topicLen, MQTTAsync_message*
 	}
 	FREE_POINTER(result);
 	LogI_Prefix("Cloud Legal ID: %ld,Recved ID: %ld\r\n", g_app_legal_msgid, ipp_msg_get.Msgid);
-	if(ipp_msg_get.Msgid<=g_app_legal_msgid)
+	/*if(ipp_msg_get.Msgid<=g_app_legal_msgid)
 	{
 		LogE_Prefix("Replay Cloud Attack!!!\r\n");
 		FREE_POINTER(ipp_msg_get.From);
@@ -320,9 +263,9 @@ int msg_arrived(void* context, char* topicName, int topicLen, MQTTAsync_message*
 		return GW_ERR;
 	}
 	else
-	{
+	{*/
 		g_app_legal_msgid = ipp_msg_get.Msgid;
-	}
+	//}
 	if( NULL == ipp_msg_get.From )
 	{
 		LogE_Prefix("ipp_msg_get.From is NULL!\r\n");
@@ -343,8 +286,6 @@ int msg_arrived(void* context, char* topicName, int topicLen, MQTTAsync_message*
 		ipp_msg_put.To	   = ipp_msg_get.From;
 		ipp_msg_put.Msgid    = ipp_msg_get.Msgid;
 		ipp_msg_put.MsgType  = 0;// RES 0
-		//ipp_msg_put.Length   = 5;
-		//ipp_msg_put.Content  ="hello";
 		ipp_msg_put.Length   = resp_len;
 		ipp_msg_put.Content  = response;
 
@@ -359,15 +300,7 @@ int msg_arrived(void* context, char* topicName, int topicLen, MQTTAsync_message*
 	FREE_POINTER(ipp_msg_get.From);
 	FREE_POINTER(ipp_msg_get.To);
 	FREE_POINTER(ipp_msg_get.Content);
-
 	return 1;//can't return 0
-}
-
-int msg_published(char * topic, char * payload)
-{
-    LogI_Prefix("msg of %s has been sent, free its payload memory 0x%x\r\n", payload, (unsigned int)(long)payload);
-    FREE_POINTER(payload);
-    return GW_OK;
 }
 
 
@@ -386,35 +319,29 @@ void mqtt_init(BOOL firstCall)
 		}
 		sleep_ms(200);
 	}
-	
-	//BOOL mqttConnectflag = FALSE;
-	MQTTAsync *client = &sdk_context.client;
-	MqttSdkInit init = {0};
-	MQTTAsync_connectOptions connectData = MQTTAsync_connectOptions_initializer;
-	MQTTAsync_willOptions wopts = MQTTAsync_willOptions_initializer;
-	int rc = 0, i = 0, reconnecttime = 2;
+	MQTTAsync_connectOptions conn_opts = MQTTAsync_connectOptions_initializer;
+	int rc = 0,reconnecttime = 2;
 	
 	linker_sn_len  = strlen(dev->sn);//need to get SN
     MALLOC( linker_sn, linker_sn_len + 1, char);
     strncpy(linker_sn, dev->sn, linker_sn_len + 1);
 	LogI_Prefix("linker_sn: %s\r\n", linker_sn);
-	LogI_Prefix("linker_sn_len: %d\r\n", linker_sn_len);
 
-	MALLOC(  init.clientId, 2 + linker_sn_len + 1, char);
-	snprintf(init.clientId, 2 + linker_sn_len + 1 , "d:%s", linker_sn);
-	LogI_Prefix("init.clientId: %s\r\n",init.clientId);
+	MALLOC(  clientId, 2 + linker_sn_len + 1, char);
+	snprintf(clientId, 2 + linker_sn_len + 1 , "d:%s", linker_sn);
+	LogI_Prefix("clientId: %s\r\n",clientId);
 
-	MALLOC(  init.username, 6 + linker_sn_len + 1, char);
-	snprintf(init.username, 6 + linker_sn_len + 1, "IPP:d:%s", linker_sn);
-	LogI_Prefix("init.username: %s\r\n",init.username);
+	MALLOC(  username, 6 + linker_sn_len + 1, char);
+	snprintf(username, 6 + linker_sn_len + 1, "IPP:d:%s", linker_sn);
+	LogI_Prefix("username: %s\r\n",username);
 
-	MALLOC(  init.password, strlen(g_mqttToken) + 1, char);
-	snprintf(init.password, strlen(g_mqttToken) + 1 , "%s", g_mqttToken);
-	LogI_Prefix("init.password:%s\r\n",init.password);
+	MALLOC(  password, strlen(g_mqttToken) + 1, char);
+	snprintf(password, strlen(g_mqttToken) + 1 , "%s", g_mqttToken);
+	LogI_Prefix("password:%s\r\n",password);
 
-	MALLOC(  init.subscribedTopic[0], 4 + linker_sn_len + 1, char);
-	snprintf(init.subscribedTopic[0], 4 + linker_sn_len + 1, "d/%s/i", linker_sn);
-	LogI_Prefix("init.subscribedTopic[0]: %s\r\n", init.subscribedTopic[0]);
+	MALLOC(  subscribedTopic, 4 + linker_sn_len + 1, char);
+	snprintf(subscribedTopic, 4 + linker_sn_len + 1, "d/%s/i", linker_sn);
+	LogI_Prefix("subscribedTopic: %s\r\n", subscribedTopic);
 
 	MALLOC(  msgReceiptTopic, 4 + linker_sn_len + 1, char);
 	snprintf(msgReceiptTopic, 4 + linker_sn_len + 1, "d/%s/m", linker_sn);
@@ -424,22 +351,16 @@ void mqtt_init(BOOL firstCall)
 	snprintf(devStatusTopic, 4 + linker_sn_len + 1, "d/%s/m",linker_sn);
 	LogI_Prefix("devStatusTopic: %s\r\n", devStatusTopic);
 
-	MALLOC( init.host, IPV4_LEN, char);
+	MALLOC( host, IPV4_LEN, char);
 	char ADDRESS[56] = {0};
-	get_mqtt_server(init.host, &init.port);
-	sprintf(ADDRESS, "tcp://%s:%d", init.host, init.port);
-	init.callbackMsgArrived   = msg_arrived;
-	init.subscribedTopicNum = 1;
-	init.subscribeQos = 1;
-	init.keepAliveInterval = HEART_BEAT_INTERVAL;
-	init.cleanSession = TRUE;
+	get_mqtt_server(host, &port);
+	sprintf(ADDRESS, "tcp://%s:%d", host, port);
 
-	sdk_context.pInitParam = &init;
+
 try_again:
 
 	if( firstCall )
 	{
-		pthread_mutex_init(&mutex, NULL);
 		firstCall = FALSE;
 	}
 	else
@@ -449,46 +370,35 @@ try_again:
 		sleep_s( reconnecttime );    /* sleep reconnectTime seconds prior to reconnect */
 	}
 
-	rc = MQTTAsync_create(client, ADDRESS, init.clientId, MQTTCLIENT_PERSISTENCE_NONE, NULL);
-	if (rc != MQTTASYNC_SUCCESS)
+	MQTTAsync_create(&client, ADDRESS, clientId, MQTTCLIENT_PERSISTENCE_NONE, NULL);
+
+	MQTTAsync_setCallbacks(client, client, NULL, msg_arrived, NULL);
+
+	conn_opts.keepAliveInterval = 30;
+	conn_opts.cleansession = 1;
+	conn_opts.username = username;
+	conn_opts.password = password;
+	conn_opts.onFailure = onConnectFailure;
+	conn_opts.automaticReconnect = 1;
+	conn_opts.minRetryInterval = 2; //seconds
+	conn_opts.maxRetryInterval = 365*24*60*60;
+	conn_opts.context = client;
+	if ( (rc = MQTTAsync_connect(client, &conn_opts) ) != MQTTASYNC_SUCCESS)
 	{
-		LogE_Prefix("MQTT Client create error, try again\n");
+		LogE_Prefix("Failed to start connect, return code %d\n", rc);
 		goto try_again;
 	}
-
-	connectData.keepAliveInterval = init.keepAliveInterval;
-	connectData.cleansession = init.cleanSession;
-	connectData.password = init.password;
-	connectData.username = init.username;
-	if(init.will.topicName )
-	{
-		connectData.will = &wopts;
-		connectData.will->message = init.will.message;
-		connectData.will->topicName = init.will.topicName;
-		connectData.will->qos = init.will.qos;
-		connectData.will->retained = init.will.retained;
-	}
-
-	rc = MQTTAsync_setCallbacks(sdk_context.client, NULL, NULL, sdk_context.pInitParam->callbackMsgArrived, NULL);
-
-	if ((rc = MQTTAsync_connect(sdk_context.client, &connectData)) != 0)
-	{
-		LogI_Prefix("MQTT connect fail, try again\r\n");
-		goto try_again;
-	}
-	else
-	{
-		LogI_Prefix("MQTT connected successfully\r\n");
-	}
-
-	for(i=0;i<init.subscribedTopicNum;i++)
-	{
-		if ((rc = MQTTAsync_subscribe(&sdk_context.client, init.subscribedTopic[i], init.subscribeQos, NULL)) != 0)
-			LogI_Prefix("MQTT subscribe topic %s fail\r\n", init.subscribedTopic[i]);
-		else
-			LogI_Prefix("MQTT subscribe topic %s success\r\n", init.subscribedTopic[i]);
-	}
-
+	while(1)
+    {
+		rc = MQTTAsync_setConnected(client, (void *)client, onConnect);
+        if (rc == MQTTASYNC_SUCCESS)
+        {
+            LogI_Prefix("Successfully setConnected.\n");
+            break;
+        }
+        sleep_s(1);
+        LogE_Prefix("Failed to setConnected, return error code %d.\n", rc);
+    }
 	LogI_Prefix("connect mqtt broker success\r\n");
 
 		
@@ -500,28 +410,27 @@ void *mqtt_func(void *arg)
 	BOOL firstCall = TRUE;
 
 	setReconnectTime(2, 10);
-reconnect:
 	mqtt_init(firstCall);
-	firstCall = FALSE;
-	MqttQuitNow *quitnow = mqtt_quit;
-	while(quit(quitnow) == FALSE)
+
+	while(isLinkerClosed == 0)
 	{
-		if( process_pub_queue() == FALSE )
-		{
-			LogE_Prefix("publish message has error\r\n");
-			goto reconnect;
-		}
+		sleep_s(10);
 	}
-	//MQTTAsync_disconnect(&sdk_context.client, 1000);
-	MQTTAsync_destroy(&sdk_context.client);
+	int rc = 0;
+	MQTTAsync_disconnectOptions disc_opts = MQTTAsync_disconnectOptions_initializer;
+	disc_opts.onSuccess = onDisconnect;
+	if ((rc = MQTTAsync_disconnect(client, &disc_opts)) != MQTTASYNC_SUCCESS)
+	{
+		LogE_Prefix("Failed to start disconnect, return code %d\n", rc);
+	}
+	MQTTAsync_destroy(&client);
 	FREE_POINTER(linker_sn);
-	FREE_POINTER(sdk_context.pInitParam->clientId);
-	FREE_POINTER(sdk_context.pInitParam->username);
-	FREE_POINTER(sdk_context.pInitParam->password);
-	FREE_POINTER(sdk_context.pInitParam->subscribedTopic[0] );
+	FREE_POINTER(clientId);
+	FREE_POINTER(username);
+	FREE_POINTER(password);
+	FREE_POINTER(subscribedTopic);
 	FREE_POINTER(msgReceiptTopic );
 	FREE_POINTER(devStatusTopic );
-	pthread_mutex_destroy(&mutex);
 
 	return NULL;
 }
@@ -613,14 +522,11 @@ int msg_reportMissing(char *info, int len, int64_t msg_id)
 	dev_msg.From = linker_sn;
 	dev_msg.ToLen = strlen("ippbizcloud");
 	dev_msg.To = "ippbizcloud";
-	dev_msg.Msgid = msg_id;
+	dev_msg.Msgid = mqtt_msg_id();
 	dev_msg.MsgType = 1;
 	dev_msg.Length = len;
 	dev_msg.Content = info;
 
-    LogI_Prefix("g_msgid: %ld\r\n",  msg_id);
-
-	LogI_Prefix("MQTT send missing MSG\r\n");
 	if ( 0 > ipp_mqtt_send(&dev_msg, msgMissingTopic, QOS_msgMissing) )
 	{
 	   LogI_Prefix("MQTT send missing MSG Failed\r\n");
@@ -642,14 +548,11 @@ int mqtt_report_status(char *info, int len, int64_t msg_id)
 	dev_msg.From = linker_sn;
 	dev_msg.ToLen = strlen("user");
 	dev_msg.To = "user";
-	dev_msg.Msgid = msg_id;
+	dev_msg.Msgid = mqtt_msg_id();
 	dev_msg.MsgType = 1;
 	dev_msg.Length = len;
 	dev_msg.Content = info;
 
-    LogI_Prefix("g_msgid: %ld\r\n", msg_id);
-
-	LogI_Prefix("MQTT send dev status\r\n");
 	if ( 0 > ipp_mqtt_send(&dev_msg, devStatusTopic, QOS_reportStatus) )
 	{
 	   LogI_Prefix("MQTT Send DevStatus Failed\r\n");
@@ -670,17 +573,39 @@ int msg_reporet_miss(char *info, int len, char *topic, int64_t msg_id)
 	dev_msg.From = linker_sn;
 	dev_msg.ToLen = strlen("ippbizcloud");
 	dev_msg.To = "ippbizcloud";
-	dev_msg.Msgid = msg_id;
+	dev_msg.Msgid = mqtt_msg_id();
 	dev_msg.MsgType = 1;
 	dev_msg.Length = len;
 	dev_msg.Content = info;
 
-    LogI_Prefix("g_msgid: %ld\r\n",  msg_id);
-
-	LogI_Prefix("MQTT send missing MSG\r\n");
 	if ( 0 > ipp_mqtt_send(&dev_msg, topic, 1) )
 	{
 	   LogI_Prefix("MQTT send missing MSG Failed\r\n");
+       return GW_ERR;
+	}
+
+	return GW_OK;
+}
+
+int mqtt_send_contrl(char *dst_sn, char *info, int len, char *topic)
+{
+    IPP_MSG  dev_msg = {0} ;
+
+	LogI_Prefix("===============Report control:%s MSG===============\r\n", topic);
+
+	dev_msg.Version = 0;
+	dev_msg.FromLen = linker_sn_len;
+	dev_msg.From = linker_sn;
+	dev_msg.ToLen = strlen(dst_sn);
+	dev_msg.To = dst_sn;
+	dev_msg.Msgid = mqtt_msg_id();
+	dev_msg.MsgType = 1;
+	dev_msg.Length = len;
+	dev_msg.Content = info;
+
+	if ( 0 > ipp_mqtt_send(&dev_msg, topic, QOS_reportStatus) )
+	{
+	   LogI_Prefix("MQTT send control MSG Failed\r\n");
        return GW_ERR;
 	}
 

@@ -35,15 +35,15 @@ int ippinte_alarm(char *deviceID, char* alarmInfo, int64_t alarmNumber);
 int ippinte_get_alarm_switch(char *devID);
 int ippinte_set_alarm_switch(char *devID, int onoff);
 int ippinte_scene_panel_report(char *info, char *sn, int len);
+int ippinte_scene_panel_get_by_point(char *devid, int point, char ** scene_panel_list);
 
 //设备云接口
 int cdc_slave_device_online(DEV_INFO_S *dev);
 int cdc_slave_device_offline(char *slaveId);
-int cdc_dev_report_status(char *sn, char *data_json);
+int cdc_dev_report_status(char *sn, char *data_json, BOOL multi);
 int cdc_regist(DEV_INFO_S *dev);
 int cdc_update(DEV_INFO_S *dev);
 char * cdc_get_token(char *devID, char **token);
-void set_cdc_ippinte_server(char *cdc_ip, short cdc_port, char *ippinte_ip, short ippinte_port);
 int http_send(char *sn, MSG_TYPE_E msg_type, char *content, int content_len);
 int http_send_msg(char *sn, MSG_TYPE_E msg_type, char *content, int content_len, BOOL async_send);
 

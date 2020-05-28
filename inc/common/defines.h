@@ -18,7 +18,6 @@
 #define MAC_LEN         18
 #define VER_LEN         20
 #define NAME_LEN		30
-#define SERVER_HOST_LEN	50
 
 #ifndef UBOUND
 #define UBOUND(arr) (int32_t)((sizeof(arr)) / (sizeof(arr[0])))
@@ -32,8 +31,10 @@
 #define ipp_min(a,b)    (((a) < (b)) ? (a) : (b))
 #endif
 
+#if !defined(_WIN32)
 #ifndef BOOL
 typedef char BOOL;
+#endif
 #endif
 
 #ifndef TRUE

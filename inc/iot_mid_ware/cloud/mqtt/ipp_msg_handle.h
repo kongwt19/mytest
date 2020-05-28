@@ -1,11 +1,11 @@
 #ifndef __IPP_MSG_HANDLE_H__
 #define __IPP_MSG_HANDLE_H__
 
+#include "platform.h"
+
 #ifndef NULL
 #define NULL 0
 #endif
-
-//typedef long long  int64_t;
 
 typedef struct {
 	char     Version;

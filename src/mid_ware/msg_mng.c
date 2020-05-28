@@ -175,7 +175,7 @@ void *msg_process_func(void *arg)
 				add_msg(item);
 			}
 		}
-		usleep(200 * 1000);
+		usleep(500 * 1000);
 	}
 }
 

@@ -10,18 +10,24 @@
 #include "gw_service.h"
 #include "string_processor.h"
 #include "iot_mid_ware.h"
+#include "biz_plf.h"
+#include "scene_panel.h"
+#include "dev_cfg.h"
 
-
+static int prase_scene_key_info(char *sn, uint32_t ep_id, char *data);
+static int prase_scene_switch_info(char *sn, uint32_t ep_id, char *data);
 static void setSensor(DEV_INFO_S *ptDevice, const char *sn, const char *productID, uint16_t type, uint64_t laddr);
-static int prase_net_info(char *sn, uint32_t ep_id, char *data);
 static int prase_light_info(char *sn, uint32_t ep_id, char *data);
+static int prase_plug_info(char *sn, uint32_t ep_id, char *data);
 static int prase_curtain_info(char *sn, uint32_t ep_id, char *data);
-static int prase_air_info(char *sn, uint32_t ep_id, char *data);
-static int prase_network_online(char *sn, uint32_t ep_id, char *data);
+static void set_network_value(int val);
+static int get_network_value(void);
+
 
 static int g_network = -1;
-
-
+static int timescnt = 0;
+static uint32_t timestamp = 0;
+static uint32_t join_time = 0;
 
 /**
  * init_rex_sdk
@@ -29,6 +35,7 @@ static int g_network = -1;
  * return: 0成功,否则-1
  * note: none
  */
+#ifndef REX_ENABLE
 int init_rex_sdk(char *name)
 {
 	RETURN_IF_NULL(name, GW_NULL_PARAM);
@@ -49,7 +56,7 @@ int init_rex_sdk(char *name)
     if(rex_set_ota_image_file_path(MAIN_OTA_IMAGE_FILE_PATH) != 0)
     {
         LogE_Prefix("Failed to rex_set_ota \r\n");
-    	return GW_ERR;
+    	//return GW_ERR;
     }
     //设置设备入网回调函数
     if(rex_set_callback(REX_DEVICE_JOIN, call_back_device_join_cb) != 0)
@@ -79,9 +86,7 @@ int init_rex_sdk(char *name)
     if(rex_set_callback(REX_REPORT_SELF_DEFINING_DATA, call_back_report_self_defining_data_cb) != 0)
     {
         LogE_Prefix("Failed to defining_data_cb \r\n");
-    	return GW_ERR;
     }
-    reg_dev_ctl_callback(CONN_TYPE_ZIGBEE, ctl_dev_adapt);
     //开始运行SDK
     if(rex_start() != 0)
     {
@@ -89,9 +94,11 @@ int init_rex_sdk(char *name)
 	    return GW_ERR;
     }
 
+    reg_dev_ctl_callback(CONN_TYPE_ZIGBEE, ctl_dev_adapt);
+
 	return GW_OK;
 }
-
+#endif
 /**
  * device_data_report
  * 构建上报数据函数
@@ -114,17 +121,23 @@ int device_data_report(char *sn, uint32_t ep_id, uint16_t data_type, char *data)
 	ptr = get_dev_info(sn);
 	if(ptr != NULL)
 	{
+		if(ptr->offline_flag == 1)
+		{
+			LogI_Prefix("device %s is offline to online!\r\n", ptr->sn);
+			cdc_slave_device_online(ptr);
+		}
+		ptr->offline_flag = 0;
 		ptr->overtime = ptr->maxtime;
+		update_dev(ptr);
 		LogD_Prefix("device report data: sn = %s, data_type = 0x%04X, data = %s\r\n", sn, data_type, data);
 		switch(data_type)
 		{
-			case NET_INFO:
+			case PLUG_INFO:
 			{
-	     		//网关上线
-	 			ret = prase_net_info(sn, ep_id, data);
+				//插座上报
+				ret = prase_plug_info(sn, ep_id, data);
 				break;
 			}
-			case PLUG_INFO:
 			case LIGHT_INFO:
 			{
 				//灯开关上报
@@ -137,10 +150,16 @@ int device_data_report(char *sn, uint32_t ep_id, uint16_t data_type, char *data)
 				ret = prase_curtain_info(sn, ep_id, data);
 				break;
 			}
-			case AIR_INFO:
+			case SCENE_KEY:
 			{
-				//面板空调上报
-				ret = prase_air_info(sn, ep_id, data);
+				/* 场景面板按键上报 */
+				ret = prase_scene_key_info(sn, ep_id, data);
+				break;
+			}
+			case SCENE_SWITCH:
+			{
+				/* 场景面板开关上报 */
+				ret = prase_scene_switch_info(sn, ep_id, data);
 				break;
 			}
 			case ONLINE_EVENT:
@@ -155,17 +174,8 @@ int device_data_report(char *sn, uint32_t ep_id, uint16_t data_type, char *data)
 	}
 	else
 	{
-		/* 网关第一次上线加入链表 */
-		if(data_type == NET_INFO)
-		{
-			LogD_Prefix("======gateway is first online======\r\n");
-			ret = prase_network_online(sn, ep_id, data);
-		}
-		else
-		{
-			LogE_Prefix("sn: %s is no exist\r\n", sn);
-			return GW_ERR;
-		}
+		LogE_Prefix("sn: %s is no exist\r\n", sn);
+		return GW_ERR;
 	}
 	
 	FREE_POINTER(ptr);
@@ -193,28 +203,39 @@ int controlZigbeeDevice(char *sn, uint32_t ep_id, USER_CONTROL_OPTION_E type, DI
 
 	switch(type)
 	{
-		case user_get_net:
-		{
-			dev_id="0000000000000000";
-			cmd = ZIGBEE_GET_NET;
-			snprintf(conmand_message, JSON_MAX_LEN, "{}");
-			break;
-		}
 		case user_join_net:
 		{
-			dev_id="0000000000000000";
+			dev_id = "0000000000000000";
 			cmd = ZIGBEE_JOIN_NET;
+			if((pDes->times > 255) || (pDes->times <= 0))
+			{
+				pDes->times = 240;
+			}
 			snprintf(conmand_message, JSON_MAX_LEN, "{\"Duration\": \"%d\"}", pDes->times);
+			join_time = pDes->times;
+			set_network_value(JOIN_NETWORK_OPEN);
+			dev_zigbee_callback(TRUE);
+			report_gw_status();
+			break;
+		}
+		case user_stop_net:
+		{
+			dev_id = "0000000000000000";
+			cmd = ZIGBEE_JOIN_NET;
+			pDes->times = 0;
+			snprintf(conmand_message, JSON_MAX_LEN, "{\"Duration\": \"%d\"}", pDes->times);
+			set_network_value(JOIN_NETWORK_CLOSE);
+			dev_zigbee_callback(FALSE);
+			report_gw_status();
 			break;
 		}
 		case user_creat_net:
 		{
-			dev_id="0000000000000000";
+			dev_id = "0000000000000000";
 			cmd = ZIGBEE_CREAT_NET;
 			snprintf(conmand_message, JSON_MAX_LEN, "{}");
 			break;
 		}
-		//case USER_SET_FACTOR:
 		case user_curtain_on:
 		case user_curtain_close:
 		case user_curtain_stop:
@@ -257,79 +278,20 @@ int controlZigbeeDevice(char *sn, uint32_t ep_id, USER_CONTROL_OPTION_E type, DI
 		}
 		case user_clear_all_devices:
 		{
-
-			dev_id="FFFFFFFFFFFFFFFF";
+			dev_id = "FFFFFFFFFFFFFFFF";
 			cmd = ZIGBEE_CLEAR_DEVICE;
 			snprintf(conmand_message, JSON_MAX_LEN, "{}");
 			break;
 		}
-		case user_creat_groupid:
-		{
-			cmd = ZIGBEE_MANAGE_GROUID;
-			snprintf(conmand_message, JSON_MAX_LEN, "{\"Action\":\"A\",\"GroupId\":\"%d\"}", pDes->groud_id);
-			break;
-		}
-		case user_delete_grouid:
-		{
-			cmd = ZIGBEE_MANAGE_GROUID;
-			snprintf(conmand_message, JSON_MAX_LEN, "{\"Action\":\"D\",\"GroupId\":\"%d\"}", pDes->groud_id);
-			break;
-		}
-		case user_delete_all_grouid:
-		{
-			cmd = ZIGBEE_MANAGE_GROUID;
-			snprintf(conmand_message, JSON_MAX_LEN, "{\"Action\":\"C\",\"GroupId\":\"\"}");
-			break;
-		}
-		case user_query_grouid:
-		{
-			cmd = ZIGBEE_MANAGE_GROUID;
-			snprintf(conmand_message, JSON_MAX_LEN, "{\"Action\":\"Q\",\"GroupId\":\"\"}");
-			break;
-		}
-		case user_creat_scene:
-		{
-			cmd = ZIGBEE_MANAGE_SCENE;
-			snprintf(conmand_message, JSON_MAX_LEN, "{\"Action\":\"A\",\"GroupId\":\"%d\",\"SceneId\":\"%d\"}", pDes->groud_id, pDes->scene_id);
-			break;
-		}
-		case user_delete_scene:
-		{
-			cmd = ZIGBEE_MANAGE_SCENE;
-			snprintf(conmand_message, JSON_MAX_LEN, "{\"Action\":\"D\",\"GroupId\":\"%d\",\"SceneId\":\"%d\"}", pDes->groud_id, pDes->scene_id);
-			break;
-		}
-		case user_delete_all_scene:
-		{
-			cmd = ZIGBEE_MANAGE_SCENE;
-			snprintf(conmand_message, JSON_MAX_LEN, "{\"Action\":\"C\",\"GroupId\":\"%d\",\"SceneId\":\"\"}", pDes->groud_id);
-			break;
-		}
-		case user_run_scene:
-		{
-			cmd = ZIGBEE_MANAGE_SCENE;
-			snprintf(conmand_message, JSON_MAX_LEN, "{\"Action\":\"E\",\"GroupId\":\"%d\",\"SceneId\":\"%d\"}", pDes->groud_id, pDes->scene_id);
-			break;
-		}
-		case user_query_scene:
-		{
-			cmd = ZIGBEE_MANAGE_SCENE;
-			snprintf(conmand_message, JSON_MAX_LEN, "{\"Action\":\"Q\",\"GroupId\":\"%d\",\"SceneId\":\"\"}", pDes->groud_id);
-			break;
-		}
-		case user_device_info:
-		case user_device_status:
-		case user_device_bind:
-		case user_call_device:
-		case user_sync_clock:
 		default:
-			break;
+			LogE_Prefix("Zigbee command type is not exist\r\n");
+			return GW_ERR;
 	}
 
-	LogD_Prefix("begin to send command_data:\r\n  sn = %s\r\n  ep_id = %d\r\n  cmd = %d\r\n  conmand_message = %s\r\n", sn, ep_id, cmd, conmand_message);
-	
+	LogI_Prefix("begin to send command_data:\r\n  sn = %s\r\n  ep_id = %d\r\n  cmd = %d\r\n  conmand_message = %s\r\n", sn, ep_id, cmd, conmand_message);
+#ifndef REX_ENABLE
 	rex_send_command_data(dev_id, ep_id, cmd, conmand_message);
-
+#endif
 	return GW_OK;
 }
 
@@ -356,16 +318,11 @@ int device_join_net_report(char *sn, char *type)
 	dev_type = dev_type_byte[0] << 8 | dev_type_byte[1];
 
 	parameters = (DEV_INFO_S*)malloc(sizeof(DEV_INFO_S));
-	RETURN_IF_NULL(parameters, GW_MALLOR_FAIL);
+	MALLOC_ERROR_RETURN_WTTH_RET(parameters, GW_MALLOR_FAIL);
 	memset(parameters, 0, sizeof(DEV_INFO_S));
 
 	switch(dev_type)
 	{
-		case DEV_GATEWAY:
-		{
-			productID = DEV_PRODUCT_GATEWAY;
-			break;
-		}
 		case DEV_ONEWAY_PLUG:
 		{
 			productID = DEV_PRODUCT_ONEWAY_PLUG;
@@ -405,13 +362,9 @@ int device_join_net_report(char *sn, char *type)
 		case DEV_THREEWAY_CURTAIN:
 		case DEV_FOURWAY_CURTAIN:
 		case DEV_FIVEWAY_CURTAIN:
-		case DEV_SIXWAY_CURTAIN:
+		case DEV_SCENE_PANEL:
 		{
-			break;
-		}
-		case DEV_SIXWAY_AIR:
-		{
-			productID = DEV_PRODUCT_SIXWAY_AIR;
+			productID = DEV_PRODUCT_SCENE;
 			break;
 		}
 		default:
@@ -419,7 +372,7 @@ int device_join_net_report(char *sn, char *type)
 	}
 	RETURN_IF_NULL(productID, GW_NULL_PARAM);
 	setSensor(parameters, sn, productID, dev_type, 0);
-	LogD_Prefix("device join net:sn = %s ,productID = %s ,dev_type = 0x%04X\r\n", parameters->sn, parameters->product_id, parameters->child_info.zigbee.type);
+	LogI_Prefix("device join net:sn = %s ,productID = %s ,dev_type = 0x%04X\r\n", parameters->sn, parameters->product_id, parameters->child_info.zigbee.type);
 
 	//设备入网上报
 	dev_online(parameters, ONLINE_JOIN_NET);
@@ -451,7 +404,7 @@ int device_online_report(char *sn, DEVICE_ONLINE_TYPE_E type)
 	{
 		tmp = get_dev_info(sn);
 		RETURN_IF_NULL(tmp, GW_NULL_PARAM);
-		LogD_Prefix("the device is online after offline\r\n");
+		LogI_Prefix("the device is online after offline\r\n");
 		dev_online(tmp, ONLINE_AFTER_OFFLINE);
 		FREE_POINTER(tmp);
 	}
@@ -468,7 +421,8 @@ int device_online_report(char *sn, DEVICE_ONLINE_TYPE_E type)
 int device_offline_report(char *sn)
 {
 	RETURN_IF_NULL(sn, GW_NULL_PARAM);
-	LogD_Prefix("device_offline is: %s\n", sn);
+
+	LogI_Prefix("the device: %s is offline\r\n", sn);
 	//设备离网上报
 	dev_offline(sn);
 	
@@ -481,23 +435,45 @@ int device_offline_report(char *sn)
  * return: 0创建网络,否则-1
  * note: none
  */
+#ifndef REX_ENABLE
 int zigbee_network_query(void)
 {
-	int ret = 0;
-	char *dev_id = "0000000000000000";
-	char cmd[JSON_MAX_LEN];
+	LogD_Prefix("g_network = %d\r\n", g_network);
+	return g_network;
+}
+#endif
 
-	memset(cmd, 0, JSON_MAX_LEN);
-	snprintf(cmd, JSON_MAX_LEN, "{}");
-
-	if(GW_OK == rex_send_command_data(dev_id, 1, ZIGBEE_GET_NET, cmd))
+int set_network_sta(void)
+{
+	if(get_network_value() == 0)
 	{
-		sleep_ms(1 * 1000);
-		LogD_Prefix("query zigbee net is working\n");
-		ret = g_network;
-	}
+		/* 入网后开始计时 */
+		if(get_ssecond() >= timestamp+join_time)
+        {
+        	timestamp = get_ssecond();
+        	timescnt++;
+        	LogD_Prefix("==============join network start cnt = %d==============\r\n", timescnt);
+        }
+		if(timescnt > 1)
+		{
+			timescnt = 0;
+			set_network_value(JOIN_NETWORK_CLOSE);
+			report_gw_status();
+			LogI_Prefix("==========JOIN_NETWORK_CLOSE: %d========\r\n", g_network);
+		}
+    }
 
-	return ret;
+    return GW_OK;
+}
+
+static void set_network_value(int val)
+{
+	g_network = val;
+}
+
+static int get_network_value(void)
+{
+	return g_network;
 }
 
 /**
@@ -523,100 +499,7 @@ static void setSensor(DEV_INFO_S *ptDevice, const char *sn, const char *productI
 	agent_strncpy(ptDevice->ip,get_gw_info()->ip , strlen(get_gw_info()->ip));
 	ptDevice->maxtime = VC_MAX_TIME;
 	ptDevice->overtime= ptDevice->maxtime;
-}
-
-/**
- * prase_network_online
- * 解析网络信息上线函数
- * sn[in]: 设备地址
- * data[in]: 状态数据,为JSON字符串
- * return: 0成功,否则-1
- * note: none
- */
-static int prase_network_online(char *sn, uint32_t ep_id, char *data)
-{
-	uint64_t panid = 0;
-	cJSON *root;
-	cJSON *pid;
-	DEV_INFO_S *ptr = NULL;
-	char *pro_id = NULL;
-	
-	RETURN_IF_NULL(sn, GW_NULL_PARAM);
-	RETURN_IF_NULL(data, GW_NULL_PARAM);
-
-	root = cJSON_Parse(data);
-	if(root)
-	{
-		ptr = (DEV_INFO_S*)malloc(sizeof(DEV_INFO_S));
-		RETURN_IF_NULL(ptr, GW_MALLOR_FAIL);
-		memset(ptr, 0, sizeof(DEV_INFO_S));
-
-		pid = cJSON_GetObjectItem(root, "ExtPanId");
-		if(pid)
-		{
-			if(0 == strcmp(pid->string, "ExtPanId"))
-			{
-				panid = atol(pid->valuestring);
-				pro_id = DEV_PRODUCT_GATEWAY;
-				setSensor(ptr, sn, pro_id, DEV_GATEWAY, panid);
-				add_dev(ptr, 0);
-				LogD_Prefix("============== device online is ok ==============\n ");
-				//dev_online(ptr, ONLINE_JOIN_NET);
-			}
-		}
-	}
-
-	FREE_POINTER(ptr);
-	cJSON_Delete(root);
-
-	return GW_OK;
-}
-
-/**
- * prase_net_info
- * 解析网络信息数据函数
- * sn[in]: 设备地址
- * data[in]: 状态数据,为JSON字符串
- * return: 0成功,否则-1
- * note: none
- */
-static int prase_net_info(char *sn, uint32_t ep_id, char *data)
-{
-	uint8_t ch = 0;
-	cJSON *root;
-	cJSON *channel;
-
-	RETURN_IF_NULL(sn, GW_NULL_PARAM);
-	RETURN_IF_NULL(data, GW_NULL_PARAM);
-
-	root = cJSON_Parse(data);
-	if(root)
-	{
-		channel = cJSON_GetObjectItem(root, "Channel");
-		if(channel)
-		{
-			if(0 == strcmp(channel->string, "Channel"))
-			{
-				ch = atol(channel->valuestring);
-				if(ch == 255)
-					g_network = -1;//zigbee没有创建网路
-				else
-					g_network = 0;//zigbee创建网路
-			}
-		}
-	}
-	else
-	{
-    	LogE_Prefix("Failed to load json command[%s]\r\n", data);
-    	cJSON_Delete(root);
-    	return GW_ERR;
-	}
-
-	LogD_Prefix("============== device g_network is %d ==============\n ", g_network);
-	
-	cJSON_Delete(root);
-		
-	return GW_OK;
+	ptDevice->offline_flag = 0;
 }
 
 /**
@@ -646,8 +529,51 @@ static int prase_light_info(char *sn, uint32_t ep_id, char *data)
 			{
 				istatus = atoi(state->valuestring);
 				memset(json_value, 0, JSON_MAX_LEN);
-				snprintf(json_value, JSON_MAX_LEN, "{\"devid\":\"%s\",\"power\":%d,\"point\":%d}", sn, istatus, ep_id);
-				LogD_Prefix("dev_report:sn = %s, json_value = %s\r\n", sn, json_value);
+				snprintf(json_value, JSON_MAX_LEN, "{\"light_val\":0,\"devstate\":%d,\"point\":%d}", istatus, ep_id);
+				LogD_Prefix("light_info: sn = %s,json_value = %s  \n", sn, json_value);
+				dev_report(sn, json_value);
+			}
+		}
+		cJSON_Delete(root);
+		return GW_OK;
+	}
+	else
+	{
+    	LogE_Prefix("Failed to load json command[%s]\r\n", data);
+    	cJSON_Delete(root);
+    	return GW_ERR;
+	}
+}
+
+/**
+ * prase_plug_info
+ * 解析插座开关数据函数
+ * sn[in]: 设备地址
+ * data[in]: 状态数据,为JSON字符串
+ * return: 0成功,否则-1
+ * note: none
+ */
+static int prase_plug_info(char *sn, uint32_t ep_id, char *data)
+{
+	uint8_t istatus = 0;
+	cJSON *root, *state;
+	char json_value[JSON_MAX_LEN];
+
+	RETURN_IF_NULL(sn, GW_NULL_PARAM);
+	RETURN_IF_NULL(data, GW_NULL_PARAM);
+
+	root = cJSON_Parse(data);
+	if(root)
+	{
+		state = cJSON_GetObjectItem(root, "State");
+		if(state)
+		{
+			if(0 == strcmp(state->string, "State"))
+			{
+				istatus = atoi(state->valuestring);
+				memset(json_value, 0, JSON_MAX_LEN);
+				snprintf(json_value, JSON_MAX_LEN, "{\"devpower\":0,\"devstate\":%d}", istatus);
+				LogD_Prefix("plug_info: sn = %s,json_value = %s  \n", sn, json_value);
 				dev_report(sn, json_value);
 			}
 		}
@@ -693,9 +619,9 @@ static int prase_curtain_info(char *sn, uint32_t ep_id, char *data)
 				else
 					istatus = 0;
 				memset(json_value, 0, JSON_MAX_LEN);
-				snprintf(json_value, JSON_MAX_LEN, "{\"devid\":\"%s\",\"power\":%d,\"level\":%d,\"point\":%d}", \
-								sn, istatus, ilevel, ep_id);
-				LogD_Prefix("dev_report:sn = %s, json_value = %s\r\n", sn, json_value);	
+				snprintf(json_value, JSON_MAX_LEN, "{\"devstate\":%d,\"level\":%d,\"point\":%d}", \
+								istatus, ilevel, ep_id);
+				LogD_Prefix("curtain_info: sn = %s,json_value = %s  \n", sn, json_value);
 				dev_report(sn, json_value);
 			}
 		}
@@ -711,18 +637,17 @@ static int prase_curtain_info(char *sn, uint32_t ep_id, char *data)
 }
 
 /**
- * prase_air_info
- * 解析面板空调数据函数
+ * prase_curtain_info
+ * 解析窗场景面板按键数据函数
  * sn[in]: 设备地址
  * data[in]: 状态数据,为JSON字符串
  * return: 0成功,否则-1
  * note: none
  */
-static int prase_air_info(char *sn, uint32_t ep_id, char *data)
+static int prase_scene_key_info(char *sn, uint32_t ep_id, char *data)
 {
-	uint8_t istatus = 0;
-	float tmp =  0;
-	cJSON *root, *state;
+	uint8_t ikeyvalue = 0;
+	cJSON *root, *keyvalue;
 	char json_value[JSON_MAX_LEN];
 
 	RETURN_IF_NULL(sn, GW_NULL_PARAM);
@@ -731,36 +656,17 @@ static int prase_air_info(char *sn, uint32_t ep_id, char *data)
 	root = cJSON_Parse(data);
 	if(root)
 	{
-		if(strstr(data, "TargetTemperature"))
+		keyvalue = cJSON_GetObjectItem(root, "KeyValue");
+		if(keyvalue)
 		{
-			state = cJSON_GetObjectItem(root, "TargetTemperature");
-			if(state)
+			if(0 == strcmp(keyvalue->string, "KeyValue"))
 			{
-				if(0 == strcmp(state->string, "TargetTemperature"))
-				{
-					tmp = atof(state->valuestring);
-					memset(json_value, 0, JSON_MAX_LEN);
-					snprintf(json_value, JSON_MAX_LEN, "{\"devid\":\"%s\",\"temperature\":%f,\"point\":%d}", sn, tmp, ep_id);
-					LogD_Prefix("dev_report:sn = %s, json_value = %s\r\n", sn, json_value);
-					dev_report(sn, json_value);
-				}
-			}
-		}
-		else if(strstr(data, "WorkMode"))
-		{
-			state = cJSON_GetObjectItem(root, "WorkMode");
-			if(state)
-			{
-				if(0 == strcmp(state->string, "WorkMode"))
-				{
-					istatus = atoi(state->valuestring);
-					if(istatus == 10)
-						istatus = 1;
-					memset(json_value, 0, JSON_MAX_LEN);
-					snprintf(json_value, JSON_MAX_LEN, "{\"devid\":\"%s\",\"power\":%d,\"point\":%d}", sn, istatus, ep_id);
-					LogD_Prefix("dev_report:sn = %s, json_value = %s\r\n", sn, json_value);
-					dev_report(sn, json_value);
-				}
+				ikeyvalue = atoi(keyvalue->valuestring);
+				memset(json_value, 0, JSON_MAX_LEN);
+				snprintf(json_value, JSON_MAX_LEN, "{\"devid\":\"%s\",\"KeyValue\":%d,\"point\":%d}", sn, ikeyvalue, ep_id);
+				LogD_Prefix("The json_value of prase_scene_key_info is %s\r\n", json_value);
+				//调场景控制
+				execute_scene_panel(sn, ikeyvalue);
 			}
 		}
 		cJSON_Delete(root);
@@ -774,35 +680,121 @@ static int prase_air_info(char *sn, uint32_t ep_id, char *data)
 	}
 }
 
-int get_joinnet_state(cJSON *data,char *sn)
+/**
+ * prase_scene_switch_info
+ * 解析窗场景面板开关数据函数
+ * sn[in]: 设备地址
+ * data[in]: 状态数据,为JSON字符串
+ * return: 0成功,否则-1
+ * note: none
+ */
+static int prase_scene_switch_info(char *sn, uint32_t ep_id, char *data)
+{
+	uint8_t iworkmode = 0;
+	cJSON *root, *workmode;
+	char json_value[JSON_MAX_LEN];
+
+	RETURN_IF_NULL(sn, GW_NULL_PARAM);
+	RETURN_IF_NULL(data, GW_NULL_PARAM);
+
+	root = cJSON_Parse(data);
+	if(root)
+	{
+		workmode = cJSON_GetObjectItem(root, "WorkMode");
+		if(workmode)
+		{
+			if(0 == strcmp(workmode->string, "WorkMode"))
+			{
+				iworkmode = atoi(workmode->valuestring);
+				memset(json_value, 0, JSON_MAX_LEN);
+				if(iworkmode == 10)
+				{
+					iworkmode = 1;
+				}
+				snprintf(json_value, JSON_MAX_LEN, "{\"devstate\":%d,\"point\":%d}", iworkmode, ep_id);
+				LogD_Prefix("The json_value of prase_scene_switch_info is %s\r\n", json_value);
+				dev_report(sn, json_value);
+				//调场景控制
+			}
+		}
+		cJSON_Delete(root);
+		return GW_OK;
+	}
+	else
+	{
+    	LogE_Prefix("Failed to load json command[%s]\r\n", data);
+    	cJSON_Delete(root);
+    	return GW_ERR;
+	}
+}
+
+/**
+ * get_joinnet_state
+ * 获取入网或删除网关json数据
+ * data[in]: json数据
+ * sn[in]: 设备地址
+ * return: 0成功,否则-1
+ * note: none
+ */
+
+int get_joinnet_state(cJSON *data, char *sn)
 {
 	cJSON *method;
 	cJSON *time;
 	int ev_point;
 	int cmd_type;
 	DataItem pDes;
-
 	memset(&pDes,0,sizeof(DataItem));
     method = cJSON_GetObjectItem(data, "method");
 	time = cJSON_GetObjectItem(data, "time");
-	if((method!=NULL) && (time !=NULL))
+	if(method!=NULL)
 	{
-		LogD_Prefix("method->valuestring is %s\r\n", method->valuestring);
-		if(0 == strcmp(method->valuestring, "start_zigbee"))
+		if( time !=NULL )
 		{
-			cmd_type = user_join_net;
-		}
+			LogD_Prefix("method->valuestring is %s\r\n",method->valuestring);
+			if(0 == strcmp(method->valuestring, "start_zigbee"))
+			{
+				cmd_type = user_join_net;
+			}
+			else if(0 == strcmp(method->valuestring, "stop_zigbee"))
+			{
+				cmd_type = user_stop_net;
+			}
+			else
+			{
+				LogD_Prefix("Control Zigbee cmd is not found,return\r\n");
+				return GW_ERR;
+			}
 
-		LogD_Prefix("time->valueint is %d\r\n",time->valueint);
-		pDes.times = time->valueint;
-		ev_point = 1;
-		LogD_Prefix("Send msf to Control Zigbee Device1: sn = %s, ev_point = %d, cmd_type = %d, pDes = %d\r\n", sn, ev_point, cmd_type, pDes.times);
-		controlZigbeeDevice(sn, ev_point, cmd_type, &pDes);
+			LogD_Prefix("time->valueint is %d\r\n",time->valueint);
+			pDes.times = time->valueint;
+			ev_point = 1;
+			LogD_Prefix("Send msf to Control Zigbee Device1: sn = %s, ev_point = %d, cmd_type = %d, pDes = %d\r\n", sn, ev_point, cmd_type, pDes.times);
+			controlZigbeeDevice(sn, ev_point, cmd_type, &pDes);
+		}
+		else
+		{
+			if(0 == strcmp(method->valuestring ,"delete_gateway"))
+			{	
+				LogI_Prefix("Delete gateway data!\n");
+				reinit_dev_list();
+				erase_dev_cfg();
+				
+			}
+		}
 	}
 	return GW_OK;
 }
 
-int get_light_state(cJSON *data,char *sn)
+/**
+ * get_light_state
+ * 获取控制灯json数据
+ * data[in]: json数据
+ * sn[in]: 设备地址
+ * return: 0成功,否则-1
+ * note: none
+ */
+int get_light_state(cJSON *data, char *sn)
 {
 	cJSON *method;
 	cJSON *point;
@@ -839,10 +831,17 @@ int get_light_state(cJSON *data,char *sn)
 	return GW_OK;
 }
 
-int get_plug_state(cJSON *data,char *sn)
+/**
+ * get_plug_state
+ * 获取控制插座json数据
+ * data[in]: json数据
+ * sn[in]: 设备地址
+ * return: 0成功,否则-1
+ * note: none
+ */
+int get_plug_state(cJSON *data, char *sn)
 {
 	cJSON *method;
-	cJSON *point;
 	cJSON *order;
 	int ev_point;
 	int cmd_type;
@@ -850,11 +849,10 @@ int get_plug_state(cJSON *data,char *sn)
 	
 	memset(&pDes,0,sizeof(DataItem));
 	method = cJSON_GetObjectItem(data, "method");
-	point= cJSON_GetObjectItem(data, "point");
 	order = cJSON_GetObjectItem(data, "order");
-	if((method!=NULL) && (point !=NULL) && (order != NULL))
+	if((method!=NULL)  && (order != NULL))
 	{
-		LogI_Prefix("method->valuestring is %s\r\n", method->valuestring);
+		LogD_Prefix("method->valuestring is %s\r\n", method->valuestring);
 		if(0 == strcmp(method->valuestring, "socketOnOff"))
 		{
 			switch(order->valueint)
@@ -873,12 +871,11 @@ int get_plug_state(cJSON *data,char *sn)
 					break;
 				default:
 					LogD_Prefix("Control Zigbee cmd is not found,return\r\n");
-					return GW_OK ;
-					break;
+					return GW_OK;
 			}
 		}
 	    
-		ev_point = point->valueint;
+		ev_point = 1;
 		LogD_Prefix("Send msf to Control Zigbee Device1: sn = %s, ev_point = %d, cmd_type = %d, pDes = %d\r\n", sn, ev_point, cmd_type, pDes.state);
 	    controlZigbeeDevice(sn, ev_point, cmd_type, &pDes);
 	}
@@ -886,7 +883,15 @@ int get_plug_state(cJSON *data,char *sn)
 	return GW_OK;
 }
 
-int get_curtain_state(cJSON *data,char *sn)
+/**
+ * get_curtain_state
+ * 获取控制窗帘json数据
+ * data[in]: json数据
+ * sn[in]: 设备地址
+ * return: 0成功,否则-1
+ * note: none
+ */
+int get_curtain_state(cJSON *data, char *sn)
 {
 	 cJSON *method;
 	 cJSON *point;
@@ -899,7 +904,7 @@ int get_curtain_state(cJSON *data,char *sn)
 	 point= cJSON_GetObjectItem(data, "point");
 	 if((method!=NULL) && (point !=NULL))
  	 {
-		 LogI_Prefix("method->valuestring is %s\r\n", method->valuestring);
+		 LogD_Prefix("method->valuestring is %s\r\n", method->valuestring);
 		 if(0 == strcmp(method->valuestring, "winOpen"))
 		 {
 			cmd_type = user_curtain_on;
@@ -928,25 +933,68 @@ int get_curtain_state(cJSON *data,char *sn)
 		 else
 		 {
 			LogD_Prefix("Control Zigbee cmd is not found,return\r\n");
-			return GW_OK ;
-		 }
-		 
+			return GW_ERR;
+		}
+
 		ev_point = point->valueint;
-		if(cmd_type != user_curtain_goto_percent)
-		{
-			LogD_Prefix("Send msf to Control Zigbee Device1: sn = %s, ev_point = %d, cmd_type = %d, pDes = %d\r\n", sn, ev_point, cmd_type, pDes.state);
-			controlZigbeeDevice(sn, ev_point, cmd_type, &pDes);
-		}
-		else
-		{
-			LogD_Prefix("Send msf to Control Zigbee Device1: sn = %s, ev_point = %d, cmd_type = %d, pDes = %d\r\n", sn, ev_point, cmd_type, pDes.level);
-			controlZigbeeDevice(sn, ev_point, cmd_type, &pDes);
-						
-		}
-	}		
+		LogD_Prefix("Send msf to Control Zigbee Device1: sn = %s, ev_point = %d, cmd_type = %d, pDes = %d\r\n", sn, ev_point, cmd_type, pDes.state);
+		controlZigbeeDevice(sn, ev_point, cmd_type, &pDes);
+	}
+
 	return GW_OK;
 }
 
+/**
+ * ctl_dev_clear_net
+ * 清除单个设备的zigbee网络
+ * sn[in]: 设备地址
+ * return: 无
+ * note: none
+ */
+void ctl_dev_clear_net(char *sn)
+{
+	int ev_point;
+	int cmd_type;
+	DataItem pDes;
+	memset(&pDes,0,sizeof(DataItem));
+	cmd_type = user_clear_device;
+	pDes.state = 255;
+	ev_point = 1;
+	LogD_Prefix("Send msf to Control Zigbee Device1: sn = %s, ev_point = %d, cmd_type = %d, pDes = %d\r\n", sn, ev_point, cmd_type, pDes.state);
+	controlZigbeeDevice(sn, ev_point, cmd_type, &pDes);
+}
+
+/**
+ * ctl_all_dev_clear_net
+ * 清除所有设备的zigbee网络
+ * sn[in]: 设备地址
+ * return: 无
+ * note: none
+ */
+void ctl_all_dev_clear_net(void)
+{
+	char *sn = NULL;
+	sn = "FFFFFFFFFFFFFFFF";
+	int ev_point;
+	int cmd_type;
+	DataItem pDes;
+	memset(&pDes,0,sizeof(DataItem));
+	cmd_type = user_clear_all_devices;
+	pDes.state = 255;
+	ev_point = 255;
+	LogD_Prefix("Send msf to Control Zigbee Device1: sn = %s, ev_point = %d, cmd_type = %d, pDes = %d\r\n", sn, ev_point, cmd_type, pDes.state);
+	controlZigbeeDevice(sn, ev_point, cmd_type, &pDes);
+}
+
+/**
+ * ctl_dev_adapt
+ * 控制设备命令
+ * dev_type: 设备类型
+ * sn[in]: 设备地址
+ * cmd[in]: 命令
+ * return: 0成功,否则-1
+ * note: none
+ */
 int ctl_dev_adapt(uint16_t dev_type, char *sn, char *cmd)
 {
 	RETURN_IF_NULL(sn, GW_NULL_PARAM);
@@ -954,41 +1002,51 @@ int ctl_dev_adapt(uint16_t dev_type, char *sn, char *cmd)
 
 	cJSON *root = cJSON_Parse(cmd);
   	RETURN_IF_NULL(root, GW_NULL_PARAM);
-	LogD_Prefix(" dev_type is 0x%04x!!!!!!!!!!!!!!!!!!!!!!!!\r\n",dev_type);
-   
-    switch(dev_type)
-   	{
-   		case DEV_GATEWAY:
-			get_joinnet_state(root, sn);
-			break;
-   		case DEV_ONEWAY_LIGHT:
-		case DEV_TWOWAY_LIGHT:
-		case DEV_THREEWAY_LIGHT:
-		case DEV_FOURWAY_LIGHT:
-			get_light_state(root,sn);
-			break;
-		case DEV_ONEWAY_PLUG:
-		case DEV_TWOWAY_PLUG:
-		case DEV_THREEWAY_PLUG:
-		case DEV_FOURWAY_PLUG:
-			get_plug_state(root,sn);
-			break;
-		case DEV_ONEWAY_CURTAIN:
-		case DEV_TWOWAY_CURTAIN:
-		case DEV_THREEWAY_CURTAIN:
-		case DEV_FOURWAY_CURTAIN:
-		case DEV_FIVEWAY_CURTAIN:
-		case DEV_SIXWAY_CURTAIN:
-			get_curtain_state(root,sn);
-			break;
-		case DEV_SIXWAY_AIR:
-		case DEV_SCENE_PANEL:
-			//get_scene_state(root,sn);
-			break;
-		default:
-			LogD_Prefix("Zigbee type is not exist\r\n");
-			break;
-   	}
+	cJSON *point;
+	cJSON *option;
+
+	point= cJSON_GetObjectItem(root, "point");
+	option = cJSON_GetObjectItem(root, "option");
+	if((option!=NULL) && (point !=NULL))
+	{
+		if(0 == strcmp(option->valuestring, "devDel"))
+		{
+			ctl_dev_clear_net(sn);
+		}
+	}
+	else
+	{
+		LogD_Prefix(" dev_type is 0x%04x!!!!!!!!!!!!!!!!!!!!!!!!\r\n", dev_type);
+	    switch(dev_type)
+	   	{
+	   		case DEV_GATEWAY:
+				get_joinnet_state(root, sn);
+				break;
+	   		case DEV_ONEWAY_LIGHT:
+			case DEV_TWOWAY_LIGHT:
+			case DEV_THREEWAY_LIGHT:
+			case DEV_FOURWAY_LIGHT:
+				get_light_state(root, sn);
+				break;
+			case DEV_ONEWAY_PLUG:
+			case DEV_TWOWAY_PLUG:
+			case DEV_THREEWAY_PLUG:
+			case DEV_FOURWAY_PLUG:
+				get_plug_state(root, sn);
+				break;
+			case DEV_ONEWAY_CURTAIN:
+			case DEV_TWOWAY_CURTAIN:
+			case DEV_THREEWAY_CURTAIN:
+			case DEV_FOURWAY_CURTAIN:
+			case DEV_FIVEWAY_CURTAIN:
+			case DEV_SIXWAY_CURTAIN:
+				get_curtain_state(root,sn);
+				break;
+			default:
+				LogE_Prefix("Zigbee device type is not exist\r\n");
+				break;
+	   	}
+	}
 
 	cJSON_Delete(root);
 

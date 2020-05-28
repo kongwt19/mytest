@@ -40,7 +40,14 @@ int ac_tcpclient_conn(ac_tcpclient *pclient)
 		return 0;
 	}
 
-	//设置套接字为非阻塞	
+#if defined(_WIN32)
+	u_long non_blk = 1;
+	if(0 > ioctlsocket(pclient->socket, FIONBIO, &non_blk))
+	{
+		LogE_Prefix("Set fd_flag error:%d\r\n", errno);
+        return -1;
+	}
+#else
     fd_flag = fcntl(pclient->socket, F_GETFL, 0);
     if (fd_flag < 0) {
         LogE_Prefix("Get fd_flag error:%d\r\n", errno);
@@ -51,13 +58,13 @@ int ac_tcpclient_conn(ac_tcpclient *pclient)
         LogE_Prefix("Set fd_flag error:%d\r\n", errno);
         return -1;
     }
+#endif
 
-    //阻塞情况下,mw300默认超时时间为20s
 	int connect_flag = connect(pclient->socket, (struct sockaddr *)&(pclient->_addr),sizeof(struct sockaddr_in));	 
    
     if (connect_flag != 0) {
         if (errno == EINPROGRESS) {
-            //正在处理连接
+            //锟斤拷锟节达拷锟斤拷锟斤拷锟斤拷
             FD_ZERO(&fdr);
             FD_ZERO(&fdw);
             FD_SET(pclient->socket, &fdr);
@@ -65,12 +72,12 @@ int ac_tcpclient_conn(ac_tcpclient *pclient)
             timeout.tv_sec  = 2;  // 2s timeout
             timeout.tv_usec = 0;
             connect_flag = select(pclient->socket + 1, &fdr, &fdw, NULL, &timeout);
-            //select调用失败
+            //select锟斤拷锟斤拷失锟斤拷
             if (connect_flag < 0) {
             	ret = -1;
                 LogE_Prefix("connect error:%d\r\n", errno);     
             }
-            //连接超时
+            //锟斤拷锟接筹拷时
             else if (connect_flag == 0) {
 				ret = -1;
                 LogE_Prefix("Connect timeout.\r\n");
@@ -100,7 +107,14 @@ int ac_tcpclient_conn(ac_tcpclient *pclient)
 		 pclient->connected = 1;
 	}
 
-	//将套接字还原为阻塞模式	
+#if defined(_WIN32)
+	u_long blk = 0;
+	if(0 > ioctlsocket(pclient->socket, FIONBIO, &blk))
+	{
+		LogE_Prefix("Set fd_flag error:%d\r\n", errno);
+        return -1;
+	}
+#else	
     fd_flag = fcntl(pclient->socket, F_GETFL, 0);
     if (fd_flag < 0) {
 	   	 LogE_Prefix("Get fd_flag error:%d\r\n", errno);
@@ -111,7 +125,8 @@ int ac_tcpclient_conn(ac_tcpclient *pclient)
 	   	 LogE_Prefix("Set fd_flag error:%d\r\n", errno);
 	   	 return -1;
     }
-	
+#endif
+
 	return ret;
 }
 

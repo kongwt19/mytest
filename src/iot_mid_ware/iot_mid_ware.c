@@ -5,6 +5,9 @@
 #include "gw_service.h"
 #include "biz_plf.h"
 #include "mqtt.h"
+#include "light_local.h"
+#include "scene_panel.h"
+#include "udp_ser.h"
 
 static char mqtt_ip[IPV4_LEN];
 static short mqtt_port;
@@ -130,10 +133,7 @@ int init_iot_mid_ware(void)
 		dev_ctl_funcs[i].ctl_func = NULL;
 	}
 
-	//2 set server
-	set_cdc_ippinte_server(cdc_ip, cdc_port, ippinte_ip, ippinte_port);
-
-	//3 register gateway
+	//2 register gateway
 	while(TRUE)
 	{
 		if(GW_OK == cdc_regist(get_gw_info()))
@@ -143,15 +143,22 @@ int init_iot_mid_ware(void)
 		sleep_ms(200);
 	}
 	
-	//4.start mqtt
+	//3 Update gateway information
+	cdc_update(get_gw_info());
+	
+	//4 start light local
+	start_light_local(process_local_msg);
+
+	//5.start mqtt
 	start_mqtt(process_mqtt_msg);
 
-	//5 Update gateway information
-	cdc_update(get_gw_info());
-
-	//6 start protocols
+	//6 start zigbee module
 	init_rex();
-	
+	reg_usb_port_callback(usb_port_callback);
+
+	init_scene_panel();
+
+	start_udp();
 	return GW_OK;
 }
 

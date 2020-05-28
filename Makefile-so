@@ -57,8 +57,11 @@ INCLUDE :=	-I ./ \
 			-I ./inc/iot_mid_ware/cloud/mqtt/paho-mqtt3c
 
 DEFINES := -DHAVE_CONFIG_H -DLINUX
+ifeq ($(ZIGBEE), true)
+	DEFINES += -DZIGBEE_ENABLE
+endif
 CFLAGS := $(DEFINES) $(INCLUDE) -Wall -fPIC
-LIBS := -lchcrypto -lpaho-mqtt3a -lpthread -lm
+LIBS := -lpaho-mqtt3a -lpthread
 LDFLAGS := -fPIC -shared
 
 ifeq ($(PLATFORM), arm64)

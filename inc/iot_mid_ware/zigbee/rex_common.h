@@ -25,8 +25,15 @@
 
 #define VC_MAX_TIME                             360
 
+
+#define JOIN_NETWORK_OPEN						0
+#define JOIN_NETWORK_CLOSE						-1
+
+
+
 /* 设备生产ID */
 #define DEV_PRODUCT_GATEWAY						"SLIFE_GW0001_hyzn002"
+#define DEV_PRODUCT_SCENE						"SLIFE_GW0001_hyzn001"
 
 #define DEV_PRODUCT_ONEWAY_PLUG					"SMH01_SOCK01_hyzn001"
 #define DEV_PRODUCT_TWOWAY_PLUG					"SMH01_SOCK01_hyzn002"
@@ -37,8 +44,6 @@
 #define DEV_PRODUCT_TWOWAY_LIGHT				"SMH01_SWTH01_hyzn002"
 #define DEV_PRODUCT_THREEWAY_LIGHT				"SMH01_SWTH01_hyzn003"
 #define DEV_PRODUCT_FOURWAY_LIGHT				"SMH01_SWTH01_hyzn004"
-
-#define DEV_PRODUCT_SIXWAY_AIR					"SLIFE_GW0001_hyzn001"
 
 #define DEV_PRODUCT_ONEWAY_CURTAIN				"SMH01_BLIND1_hyzn001"
 
@@ -67,6 +72,7 @@ typedef enum
 {
 	user_get_net = 0,				//获取网络信息
 	user_join_net,					//准许入网
+	user_stop_net,					//拒绝入网
 	user_set_net,					//设置网络信息
 	user_get_gateway_ver,			//获取网关版本
 	user_get_gateway_info,			//获取网关认证信息
@@ -180,8 +186,7 @@ typedef enum
 	DEV_SIXWAY_CURTAIN 		= 0x1345,
 
 	//场景面板
-	DEV_SIXWAY_AIR          = 0x1312,
-	DEV_SCENE_PANEL 		= 0x1313
+	DEV_SCENE_PANEL 		= 0x1312
 }DEVICE_JION_NET_TYPE_E;
 
 //设备SDK上报类型
@@ -201,7 +206,9 @@ typedef enum
 	SCENE_INFO					= 0x021A,  //场景
 	BIND_INFO					= 0x021E,  //绑定
 	//事件
-	SCENE_EVENT					= 0x0305,  //场景
+	SCENE_EVENT					= 0x0305,  //场景触发
+	SCENE_KEY					= 0x03A1,  //场景按键
+	SCENE_SWITCH                = 0x0218,  //场景开关
 	ONLINE_EVENT				= 0x0308,  //上线
 	LOW_POWER_EVENT				= 0x0309,  //低电量
 	AUTH_EVENT					= 0x0370, //认证
@@ -230,7 +237,10 @@ int controlZigbeeDevice(char *sn, uint32_t ep_id, USER_CONTROL_OPTION_E type, DI
 int device_join_net_report(char *sn, char *type);
 int device_online_report(char *sn, DEVICE_ONLINE_TYPE_E type);
 int device_offline_report(char *sn);
+int set_network_sta(void);
 int zigbee_network_query(void);
+void ctl_dev_clear_net(char *sn);
+void ctl_all_dev_clear_net(void);
 int ctl_dev_adapt(uint16_t dev_type, char *sn, char *cmd);
 
 #endif

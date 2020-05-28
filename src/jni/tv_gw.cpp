@@ -4,13 +4,44 @@
 #include "gw_service.h"
 #include "dev_mng.h"
 #include "dev_cfg.h"
+#include <string.h>
+#include <wchar.h>
 
-static JNIEnv* Env;
-static jobject j_obj = NULL;
-static jmethodID online_callback_id = NULL;
-static jmethodID offline_callback_id = NULL;
-static jmethodID alarm_callback_id = NULL;
 
+static JavaVM* vm;
+static jobject j_obj;
+jmethodID onlineCallback = NULL;
+jmethodID offlineCallback = NULL;
+jmethodID alarmCallback = NULL;
+jmethodID zigbeeCallback = NULL;
+bool needDetach = false;
+
+static JNIEnv* getJNIEnv(JavaVM* pJavaVM)
+{
+   	JNIEnv* lEnv;
+   	if((pJavaVM)->AttachCurrentThread((void **)&lEnv, NULL) != JNI_OK){
+   		lEnv = NULL;
+   	}
+   	return lEnv;
+}
+
+jstring cTojs(JNIEnv* env, char* str)
+{
+	const size_t cSize = strlen(str)+1;
+	wchar_t* wc = new wchar_t[cSize];
+	mbstowcs (wc, str, cSize);
+	size_t len = wcslen(wc);
+	jchar* str2 = (jchar*)malloc(sizeof(jchar)*(len+1));
+	int i;
+	for (i = 0; i < len; i++)
+	{
+		str2[i] = wc[i];
+	}
+	str2[len] = 0;
+	jstring js = env->NewString(str2, len);
+	free(str2);
+	return js;
+}
 
 class GW{
 	
@@ -22,6 +53,7 @@ public:
 	void gw_reg_online_callback(ONLINE_CALLBACK cb);
 	void gw_reg_offline_callback(OFFLINE_CALLBACK cb);
 	void gw_reg_alarm_callback(ALARM_CALLBACK cb);
+	void gw_reg_zigbee_callback(ZIGBEE_CALLBACK cb);
 	void gw_set_mqtt_server(const char *ip, const short port);
 	void gw_set_cdc_server(const char *ip, const short port);
 	void gw_set_ippinte_server(const char *ip, const short port);
@@ -69,6 +101,11 @@ void GW::gw_reg_alarm_callback(ALARM_CALLBACK cb)
     reg_alarm_callback(cb);
 }
 
+void GW::gw_reg_zigbee_callback(ZIGBEE_CALLBACK cb)
+{
+	reg_zigbee_callback(cb);
+}
+
 void GW::gw_set_mqtt_server(const char *ip, const short port)
 {
     set_mqtt_server(ip, port);
@@ -89,90 +126,114 @@ int GW::gw_init_iot_mid_ware()
     return init_iot_mid_ware();
 }
 
-jstring charTojstring(JNIEnv* env, const char* pat) {
-    //????java String?? strClass
-    jclass strClass = (env)->FindClass("Ljava/lang/String;");
-    //???String(byte[],String)?L?????,?????????byte[]????????h????String
-    jmethodID ctorID = (env)->GetMethodID(strClass, "<init>", "([BLjava/lang/String;)V");
-    //????byte????
-    jbyteArray bytes = (env)->NewByteArray(strlen(pat));
-    //??char* ????byte????
-    (env)->SetByteArrayRegion(bytes, 0, strlen(pat), (jbyte*) pat);
-    // ????String, ????????????,????byte?????????String??????
-    jstring encoding = (env)->NewStringUTF("GB2312");
-    //??byte????????java String,?????
-    return (jstring) (env)->NewObject(strClass, ctorID, bytes, encoding);
-}
-
-
-void online_callback(char *sn)
+void online_callback(char *sn, char *product_id)
 {
+	JNIEnv* jniEnv = __null;
 	jstring jsn;
+	jstring jproduct_id;
+	if (vm->GetEnv(reinterpret_cast<void **> (&jniEnv), JNI_VERSION_1_6) != JNI_OK)
+	{
+		jniEnv = getJNIEnv(vm);  //锟斤拷锟斤拷锟斤拷一锟轿达拷锟斤拷
+		needDetach = true;
+	}
 	if(sn != NULL)
 	{
-		jsn = charTojstring(Env, sn);
+		jsn = cTojs(jniEnv, sn);
+		jproduct_id = cTojs(jniEnv, product_id);
 	}
 	else
 	{
+		if(needDetach)
+		{
+			vm->DetachCurrentThread();
+		}
 		return;
 	}
-	if(j_obj != NULL && online_callback_id != NULL)
+	(*jniEnv).CallIntMethod(j_obj, onlineCallback, jsn, jproduct_id);
+	if(needDetach)
 	{
-		(*Env).CallVoidMethod(j_obj, online_callback_id, jsn);
-	}
-	else
-	{
-		return;
+		vm->DetachCurrentThread();
 	}
 }
 
-void offline_callback(char *sn)
+void offline_callback(char *sn, char *product_id)
 {
+	JNIEnv* jniEnv = __null;
 	jstring jsn;
+	jstring jproduct_id;
+	if (vm->GetEnv(reinterpret_cast<void **> (&jniEnv), JNI_VERSION_1_6) != JNI_OK)
+	{
+		jniEnv = getJNIEnv(vm);  //锟斤拷锟斤拷锟斤拷一锟轿达拷锟斤拷
+		needDetach = true;
+	}
 	if(sn != NULL)
 	{
-		jsn = charTojstring(Env, sn);
+		jsn = cTojs(jniEnv, sn);
+		jproduct_id = cTojs(jniEnv, product_id);
 	}
 	else
 	{
+		if(needDetach)
+		{
+			vm->DetachCurrentThread();
+		}
 		return;
 	}
-	if(j_obj != NULL && offline_callback_id != NULL)
+	(*jniEnv).CallIntMethod(j_obj, offlineCallback, jsn, jproduct_id);
+	if(needDetach)
 	{
-		(*Env).CallVoidMethod(j_obj, offline_callback_id, jsn);
-	}
-	else
-	{
-		return;
+		vm->DetachCurrentThread();
 	}
 }
 
 void alarm_callback(char *sn, char *alarm)
 {
+	JNIEnv* jniEnv = __null;
 	jstring jsn;
 	jstring jalarm;
+	if (vm->GetEnv(reinterpret_cast<void **> (&jniEnv), JNI_VERSION_1_6) != JNI_OK)
+	{
+		jniEnv = getJNIEnv(vm);  //锟斤拷锟斤拷锟斤拷一锟轿达拷锟斤拷
+		needDetach = true;
+	}
 	if(sn != NULL && alarm != NULL)
 	{
-		jsn = charTojstring(Env, sn);
-		jalarm = charTojstring(Env, alarm);
+		jsn = cTojs(jniEnv, sn);
+		jalarm = cTojs(jniEnv, alarm);
 	}
 	else
 	{
+		if(needDetach)
+		{
+			vm->DetachCurrentThread();
+		}
 		return;
 	}
-	if(j_obj != NULL && alarm_callback_id != NULL)
+	(*jniEnv).CallIntMethod(j_obj, alarmCallback, jsn, jalarm);
+	if(needDetach)
 	{
-		(*Env).CallVoidMethod(j_obj, alarm_callback_id, jsn, jalarm);
+		vm->DetachCurrentThread();
 	}
-	else
+}
+
+void zigbee_callback(int flag)
+{
+	JNIEnv* jniEnv = __null;
+	if (vm->GetEnv(reinterpret_cast<void **> (&jniEnv), JNI_VERSION_1_6) != JNI_OK)
 	{
-		return;
+		jniEnv = getJNIEnv(vm);  //锟斤拷锟斤拷锟斤拷一锟轿达拷锟斤拷
+		needDetach = true;
+	}
+	(*jniEnv).CallIntMethod(j_obj, zigbeeCallback, (jint)flag);
+	if(needDetach)
+	{
+		vm->DetachCurrentThread();
 	}
 }
 
 
 
-JNIEXPORT void JNICALL Java_tv_gw_setCfgFile(JNIEnv *env, jobject, jstring file)
+JNIEXPORT void JNICALL Java_com_smart_changhong_smartipptv_JniMethod_setCfgFile(JNIEnv *env, jobject, jstring file)
 {
 	GW t;      //????????
 	char* str_file=(char *)(*env).GetStringUTFChars(file, NULL);
@@ -180,13 +241,13 @@ JNIEXPORT void JNICALL Java_tv_gw_setCfgFile(JNIEnv *env, jobject, jstring file)
 	(*env).ReleaseStringUTFChars(file, str_file);
 }
 
-JNIEXPORT jint JNICALL Java_tv_gw_initMidWare(JNIEnv *env, jobject)
+JNIEXPORT jint JNICALL Java_com_smart_changhong_smartipptv_JniMethod_initMidWare(JNIEnv *env, jobject)
 {
 	GW t;
     return t.gw_init_mid_ware();
 }
 
-JNIEXPORT void JNICALL Java_tv_gw_setGwInfo(JNIEnv *env, jobject, jobject g_w)
+JNIEXPORT void JNICALL Java_com_smart_changhong_smartipptv_JniMethod_setGwInfo(JNIEnv *env, jobject, jobject g_w)
 {
 	GW t;
 	DEV_INFO_S gw;
@@ -361,45 +422,50 @@ JNIEXPORT void JNICALL Java_tv_gw_setGwInfo(JNIEnv *env, jobject, jobject g_w)
 }
 
 
-JNIEXPORT void JNICALL Java_tv_gw_regOnlineCallback(JNIEnv *env, jobject obj)
+JNIEXPORT void JNICALL Java_com_smart_changhong_smartipptv_JniMethod_regOnlineCallback(JNIEnv *env, jobject obj)
 {
-	Env = env;
-    j_obj = env->NewGlobalRef(obj);//???????h????
+	env->GetJavaVM(&vm);
+	if(vm == NULL)
+	{
+		LogD_Prefix("GetJavaVM: failed to get reference");
+		return;
+	}
+	j_obj = env->NewGlobalRef(obj);
 	jclass clazz = env->GetObjectClass(obj);
 	if (!clazz) {
 		LogD_Prefix("OnlineCallback: failed to get class reference\n");
 		return;
 	}
-	jmethodID methodID = (*env).GetMethodID(clazz, "onlinecallback", "(Ljava/lang/String;)I");
-	if (methodID == 0) 
+	jmethodID methodID = (*env).GetMethodID(clazz, "onlinecallback", "(Ljava/lang/String;Ljava/lang/String;)I");
+	if (methodID == NULL)
 	{
 		LogD_Prefix("OnlineCallback methodID: failed to get class reference\n");
 		return;
 	}
-	online_callback_id = methodID;
+	onlineCallback = methodID;
 	GW t;
 	t.gw_reg_online_callback(online_callback);
 }
 
-JNIEXPORT void JNICALL Java_tv_gw_regOfflineCallback(JNIEnv *env, jobject obj)
+JNIEXPORT void JNICALL Java_com_smart_changhong_smartipptv_JniMethod_regOfflineCallback(JNIEnv *env, jobject obj)
 {
 	jclass clazz = env->GetObjectClass(obj);
 	if (!clazz) {
 		LogD_Prefix("OfflineCallback: failed to get class reference\n");
 		return;
 	}
-	jmethodID methodID = (*env).GetMethodID(clazz, "offlinecallback", "(Ljava/lang/String;)I");
-	if (methodID == 0) 
+	jmethodID methodID = (*env).GetMethodID(clazz, "offlinecallback", "(Ljava/lang/String;Ljava/lang/String;)I");
+	if (methodID == NULL)
 	{
 		LogD_Prefix("OfflineCallback methodID: failed to get class reference\n");
 		return;
 	}
-	offline_callback_id = methodID;
+	offlineCallback = methodID;
 	GW t;
 	t.gw_reg_offline_callback(offline_callback);
 }
 
-JNIEXPORT void JNICALL Java_tv_gw_regAlarmCallback(JNIEnv *env, jobject obj)
+JNIEXPORT void JNICALL Java_com_smart_changhong_smartipptv_JniMethod_regAlarmCallback(JNIEnv *env, jobject obj)
 {
 	jclass clazz = env->GetObjectClass(obj);
 	if (!clazz) {
@@ -407,18 +473,36 @@ JNIEXPORT void JNICALL Java_tv_gw_regAlarmCallback(JNIEnv *env, jobject obj)
 		return;
 	}
 	jmethodID methodID = (*env).GetMethodID(clazz, "alarmcallback", "(Ljava/lang/String;Ljava/lang/String;)I");
-	if (methodID == 0) 
+	if (methodID == NULL)
 	{
 		LogD_Prefix("AlarmCallback methodID: failed to get class reference\n");
 		return;
 	}
-	alarm_callback_id = methodID;
+	alarmCallback = methodID;
 	GW t;
 	t.gw_reg_alarm_callback(alarm_callback);
 }
 
+JNIEXPORT void JNICALL Java_com_smart_changhong_smartipptv_JniMethod_regZigbeeCallback(JNIEnv *env, jobject obj)
+{
+	jclass clazz = env->GetObjectClass(obj);
+	if (!clazz) {
+		LogD_Prefix("ZigbeeCallback: failed to get class reference\n");
+		return;
+	}
+	jmethodID methodID = (*env).GetMethodID(clazz, "zigbeecallback", "(I)I");
+	if (methodID == NULL)
+	{
+		LogD_Prefix("ZigbeeCallback methodID: failed to get class reference\n");
+		return;
+	}
+	zigbeeCallback = methodID;
+	GW t;
+	t.gw_reg_zigbee_callback(zigbee_callback);
+}
 
-JNIEXPORT void JNICALL Java_tv_gw_setMqttServer(JNIEnv *env, jobject, jstring ip, jshort port)
+
+JNIEXPORT void JNICALL Java_com_smart_changhong_smartipptv_JniMethod_setMqttServer(JNIEnv *env, jobject, jstring ip, jshort port)
 {
 	GW t;
 	const char* mqtt_ip   = (*env).GetStringUTFChars(ip, NULL);
@@ -427,7 +511,7 @@ JNIEXPORT void JNICALL Java_tv_gw_setMqttServer(JNIEnv *env, jobject, jstring ip
 	(*env).ReleaseStringUTFChars(ip, mqtt_ip);
 }
 
-JNIEXPORT void JNICALL Java_tv_gw_setCdcServer(JNIEnv *env, jobject, jstring ip, jshort port)
+JNIEXPORT void JNICALL Java_com_smart_changhong_smartipptv_JniMethod_setCdcServer(JNIEnv *env, jobject, jstring ip, jshort port)
 {
 	GW t;
 	const char* cdc_ip   = (*env).GetStringUTFChars(ip, NULL);
@@ -436,7 +520,7 @@ JNIEXPORT void JNICALL Java_tv_gw_setCdcServer(JNIEnv *env, jobject, jstring ip,
 	(*env).ReleaseStringUTFChars(ip, cdc_ip);
 }
 
-JNIEXPORT void JNICALL Java_tv_gw_setIppinteServer(JNIEnv *env, jobject, jstring ip, jshort port)
+JNIEXPORT void JNICALL Java_com_smart_changhong_smartipptv_JniMethod_setIppinteServer(JNIEnv *env, jobject, jstring ip, jshort port)
 {
 	GW t;
 	const char* ippinte_ip   = (*env).GetStringUTFChars(ip, NULL);
@@ -445,7 +529,7 @@ JNIEXPORT void JNICALL Java_tv_gw_setIppinteServer(JNIEnv *env, jobject, jstring
 	(*env).ReleaseStringUTFChars(ip, ippinte_ip);
 }
 
-JNIEXPORT jint JNICALL Java_tv_gw_initIotMidWare(JNIEnv *, jobject)
+JNIEXPORT jint JNICALL Java_com_smart_changhong_smartipptv_JniMethod_initIotMidWare(JNIEnv *, jobject)
 {
 	GW t;
     return t.gw_init_iot_mid_ware();

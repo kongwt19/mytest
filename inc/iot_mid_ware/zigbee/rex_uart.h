@@ -1,6 +1,11 @@
 #ifndef __REX_UART_H__
 #define __REX_UART_H__
 
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <stdint.h>
 
 typedef enum _usb_port_sta
 {
@@ -11,7 +16,7 @@ typedef enum _usb_port_sta
 
 typedef void(*USB_PORT_CHECK)(USB_PORT_STA_E sta);
 
-
+uint32_t get_ssecond(void);
 void reg_usb_port_callback(USB_PORT_CHECK cb);
 char *read_uart_dev(void);
 int usb_dev_query(void);

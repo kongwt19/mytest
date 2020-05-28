@@ -6,7 +6,7 @@
 #include "stdlib.h"
 
 char cfg_file[256];
-
+#define MAX_DEV_MEM 1300
 /**
 * Set device configuration file
 * @param file, the path of config file
@@ -14,6 +14,7 @@ char cfg_file[256];
 */
 void set_cfg_file(char *file)
 {
+	LogI_Prefix("------------Set configure file path is %s------------\n",file);
     memset(cfg_file, 0, sizeof(cfg_file));
     strncpy(cfg_file, file,sizeof(cfg_file));
 }
@@ -80,7 +81,7 @@ int read_dev_cfg(uint8_t *buf, uint32_t size)
 	
 	RETURN_IF_NULL(buf, GW_NULL_PARAM);
 	
-	LogD_Prefix("Read device configuration.........\n");  
+	LogI_Prefix("Read device configuration.........\n");  
 	
     fd = open(cfg_file, O_RDWR);
     if(0 > fd)
@@ -106,10 +107,10 @@ int read_dev_cfg(uint8_t *buf, uint32_t size)
 	LogD_Prefix("the data7 is %x\n",buf[7]);
 	LogD_Prefix("the data8 is %x\n",buf[8]);
 	LogD_Prefix("the data9 is %x\n",buf[9]);
-	LogD_Prefix("the data899 is %x\n",buf[899]);
+	LogD_Prefix("the dataMAX_DEV_MEM-1 is %x\n",buf[MAX_DEV_MEM-1]);
 	
     close(fd);
-	LogD_Prefix("Read device configuration ok.........\n");
+	LogI_Prefix("Read device configuration ok.........\n");
 	
     return GW_OK;  
 }
@@ -123,7 +124,7 @@ int erase_dev_cfg(void)
 {
 	int fd = -1;
 	
-	LogD_Prefix("Erase device configuration.........\n");  
+	LogI_Prefix("Erase device configuration.........\n");  
 	
     fd = open(cfg_file, O_RDWR);
     if(0 > fd)
@@ -136,7 +137,7 @@ int erase_dev_cfg(void)
     lseek(fd,0,SEEK_SET);
 	close(fd);
 	
-	LogD_Prefix("Erase device configuration ok.........\n");  
+	LogI_Prefix("Erase device configuration ok.........\n");  
 	
 	return GW_OK; 
 }
@@ -152,7 +153,7 @@ int is_file_null(void)
     char ch;  
       
     ret = (cfg_file != NULL);  
-    LogD_Prefix(" open  file! \n");  
+    LogI_Prefix(" Open  file! \n");  
     if(ret)  
     {  
           
@@ -165,7 +166,7 @@ int is_file_null(void)
           
         ch=fgetc(fp);  
           
-        if(ch == 0xff) //EOF = -1, Ҳ����0xff;
+        if(ch == 0xff) //EOF = -1, Ò²¾ÍÊÇ0xff;
             ret = 0; 
   
         else  
@@ -184,37 +185,42 @@ int is_file_null(void)
 */
 int save_dev_info(DEV_INFO_S *dev)
 {
-	uint8_t p[900];
-	uint8_t number;
+	uint8_t p[MAX_DEV_MEM];
+	uint16_t number;
 	int ret;
 	RETURN_IF_NULL(dev, GW_NULL_PARAM);
+	if(CONN_TYPE_ZIGBEE != dev->conn_type)
+	{
+		return GW_OK;
+	}
+	dev->offline_flag = 0;
 	ret= is_file_null();
-	memset(p, 0, 900);
+	memset(p, 0, MAX_DEV_MEM);
 	if(ret == 0 || ret == 1)
 	{
 		if(ret == 0)
 		{
 			LogE_Prefix("The file is NULL.......... \r\n");
 			//erase_dev_cfg();
-			p[899]=0;
+			p[MAX_DEV_MEM-1]=0;
 			number=0;
 			
 		}
 		if(ret == 1)
 		{
-			read_dev_cfg(p,900);
-			LogD_Prefix("The dev number is %02x............. \r\n",p[899]);
-			number=p[899]*10;
+			read_dev_cfg(p,MAX_DEV_MEM);
+			LogD_Prefix("The dev number is %02x............. \r\n",p[MAX_DEV_MEM-1]);
+			number=p[MAX_DEV_MEM-1]*10;
 		}
 		
 		//dev->child_info.zigbee.long_addr = mac_data_to_i(dev->sn);
-		LogI_Prefix("dev->sn is %s \r\n", dev->sn);
+		LogD_Prefix("New device dev->sn is %s \r\n", dev->sn);
 		dev->child_info.zigbee.long_addr = strtoul(dev->sn, NULL, 16);
-		dev->child_info.zigbee.node_number=p[899];
-		p[899]+=1;
-		LogD_Prefix("new device node_number is 0x%02X ............. \r\n",dev->child_info.zigbee.node_number);
-		LogD_Prefix("new device mac_address is 0x%016lX ............. \r\n",dev->child_info.zigbee.long_addr);
-		LogD_Prefix("new device type is 0x%02X ............. \r\n",dev->child_info.zigbee.type);
+		dev->child_info.zigbee.node_number=p[MAX_DEV_MEM-1];
+		p[MAX_DEV_MEM-1]+=1;
+		LogD_Prefix("New device node_number is 0x%02X ............. \r\n",dev->child_info.zigbee.node_number);
+		LogD_Prefix("New device mac_address is 0x%016lX ............. \r\n",dev->child_info.zigbee.long_addr);
+		LogD_Prefix("New device type is 0x%02X ............. \r\n",dev->child_info.zigbee.type);
 		p[number+0] =  (dev->child_info.zigbee.long_addr)&0xFF;
 		p[number+1] = ((dev->child_info.zigbee.long_addr)>>8)&0xFF;
 		p[number+2] = ((dev->child_info.zigbee.long_addr)>>16)&0xFF;
@@ -228,103 +234,17 @@ int save_dev_info(DEV_INFO_S *dev)
 		p[number+9] = (dev->child_info.zigbee.type>>8)&0xFF;
 		if( GW_OK == erase_dev_cfg())
 		{
-			save_dev_cfg(p, 900);
+			save_dev_cfg(p, MAX_DEV_MEM);
 		}
 	
 	}
+	else
+	{
+		return GW_ERR;
+	}	
 	return GW_OK;
 }
 
-
-// int save_dev_info(DEV_INFO_S *dev)
-// {
-	// uint8_t p[900];
-	// uint8_t number;
-	// int ret;
-	// RETURN_IF_NULL(dev, GW_NULL_PARAM);
-	// ret= is_file_null();
-	// memset(p, 0, 900);
-	// if(ret == 0)
-	// {
-		// LogE_Prefix("The file is NULL.......... \r\n");
-		// //erase_dev_cfg();
-		// p[899]=0;
-		// number=0;
-		// //return GW_OK;
-	// }
-	// if(ret == 1)
-	// {
-		// read_dev_cfg(p,900);
-		// LogD_Prefix("The dev number is %02x............. \r\n",p[899]);
-		// number=p[899]*10;
-	// }
-	// //dev->child_info.zigbee.long_addr = mac_data_to_i(dev->sn);
-	// LogI_Prefix("dev->sn is %s \r\n", dev->sn);
-	// dev->child_info.zigbee.long_addr = strtoul(dev->sn, NULL, 16);
-	// dev->child_info.zigbee.node_number=p[899];
-	// p[899]+=1;
-	// LogD_Prefix("new device node_number is 0x%02X ............. \r\n",dev->child_info.zigbee.node_number);
-	// LogD_Prefix("new device mac_address is 0x%016lX ............. \r\n",dev->child_info.zigbee.long_addr);
-	// LogD_Prefix("new device type is 0x%02X ............. \r\n",dev->child_info.zigbee.type);
-	// p[number+0] =  (dev->child_info.zigbee.long_addr)&0xFF;
-	// p[number+1] = ((dev->child_info.zigbee.long_addr)>>8)&0xFF;
-	// p[number+2] = ((dev->child_info.zigbee.long_addr)>>16)&0xFF;
-	// p[number+3] = ((dev->child_info.zigbee.long_addr)>>24)&0xFF;
-	// p[number+4] = ((dev->child_info.zigbee.long_addr)>>32)&0xFF;
-	// p[number+5] = ((dev->child_info.zigbee.long_addr)>>40)&0xFF;
-	// p[number+6] = ((dev->child_info.zigbee.long_addr)>>48)&0xFF;
-	// p[number+7] = ((dev->child_info.zigbee.long_addr)>>56)&0xFF;
-	// //p[number+8] = dev->child_info.zigbee.type;
-	// p[number+8] = (dev->child_info.zigbee.type)&0xFF;
-    // p[number+9] = (dev->child_info.zigbee.type>>8)&0xFF;
-	// if( GW_OK == erase_dev_cfg())
-	// {
-		// save_dev_cfg(p, 900);
-		// if(ret == 0 || ret == 1)
-		// {
-			// if(ret == 0)
-			// {
-				// LogE_Prefix("The file is NULL.......... \r\n");
-				// //erase_dev_cfg();
-				// p[899]=0;
-				// number=0;
-				
-			// }
-			// if(ret == 1)
-			// {
-				// read_dev_cfg(p,900);
-				// LogD_Prefix("The dev number is %02x............. \r\n",p[899]);
-				// number=p[899]*10;
-			// }
-			
-			// //dev->child_info.zigbee.long_addr = mac_data_to_i(dev->sn);
-			// LogI_Prefix("dev->sn is %s \r\n", dev->sn);
-			// dev->child_info.zigbee.long_addr = strtoul(dev->sn, NULL, 16);
-			// dev->child_info.zigbee.node_number=p[899];
-			// p[899]+=1;
-			// LogD_Prefix("new device node_number is 0x%02X ............. \r\n",dev->child_info.zigbee.node_number);
-			// LogD_Prefix("new device mac_address is 0x%016lX ............. \r\n",dev->child_info.zigbee.long_addr);
-			// LogD_Prefix("new device type is 0x%02X ............. \r\n",dev->child_info.zigbee.type);
-			// p[number+0] =  (dev->child_info.zigbee.long_addr)&0xFF;
-			// p[number+1] = ((dev->child_info.zigbee.long_addr)>>8)&0xFF;
-			// p[number+2] = ((dev->child_info.zigbee.long_addr)>>16)&0xFF;
-			// p[number+3] = ((dev->child_info.zigbee.long_addr)>>24)&0xFF;
-			// p[number+4] = ((dev->child_info.zigbee.long_addr)>>32)&0xFF;
-			// p[number+5] = ((dev->child_info.zigbee.long_addr)>>40)&0xFF;
-			// p[number+6] = ((dev->child_info.zigbee.long_addr)>>48)&0xFF;
-			// p[number+7] = ((dev->child_info.zigbee.long_addr)>>56)&0xFF;
-			// //p[number+8] = dev->child_info.zigbee.type;
-			// p[number+8] = (dev->child_info.zigbee.type)&0xFF;
-			// p[number+9] = (dev->child_info.zigbee.type>>8)&0xFF;
-			// if( GW_OK == erase_dev_cfg())
-			// {
-				// save_dev_cfg(p, 900);
-			// }
-		
-		// }
-		// return GW_OK;
-	// }
-// }
 /**
 * Save  device message into file after delete device
 * @param sn, device serial number
@@ -333,20 +253,24 @@ int save_dev_info(DEV_INFO_S *dev)
 int del_dev_info(char* sn, DEV_NODE_S *node, LIST_HEAD_T *dev_list_head)
 {
 	DEV_INFO_S *debug = NULL;
-	uint8_t p[900];
+	uint8_t p[MAX_DEV_MEM];
 	uint8_t number;
 	int k,i;
 	int ret;
 	RETURN_IF_NULL(sn, GW_NULL_PARAM);
 	RETURN_IF_NULL(node, GW_NULL_PARAM);
 	RETURN_IF_NULL(dev_list_head, GW_NULL_PARAM);
+	if(CONN_TYPE_ZIGBEE != node->dev_info.conn_type)
+	{
+		return GW_OK;
+	}
 	debug = &node->dev_info;
 	if(NULL == debug)
 	{
-		LogE_Prefix("delelte dev is not existed \r\n");
+		LogE_Prefix("Delelte dev is not existed \r\n");
 		return GW_ERR;
 	}
-	memset(p, 0, 900);//181218
+	memset(p, 0, MAX_DEV_MEM);//181218
 	ret= is_file_null();
 	if(ret == 0)
 	{
@@ -355,27 +279,27 @@ int del_dev_info(char* sn, DEV_NODE_S *node, LIST_HEAD_T *dev_list_head)
 	}
 	if(ret == 1)
 	{
-		read_dev_cfg(p,900);
+		read_dev_cfg(p,MAX_DEV_MEM);
 		number = debug->child_info.zigbee.node_number;
-		LogD_Prefix("delelte device node_number is 0x%02X ............. \r\n",debug->child_info.zigbee.node_number);
-		LogD_Prefix("delelte device type is 0x%02X ............. \r\n",debug->child_info.zigbee.type);
+		LogD_Prefix("Delelte device node_number is 0x%02X ............. \r\n",debug->child_info.zigbee.node_number);
+		LogD_Prefix("Delelte device type is 0x%02X ............. \r\n",debug->child_info.zigbee.type);
 		k = number*10;
-		LogD_Prefix("delelte device type is 0x%02X ............. \r\n",p[k+8]);
+		LogD_Prefix("Delelte device type is 0x%02X ............. \r\n",p[k+8]);
 		
 		if( p[k+8] == ((debug->child_info.zigbee.type)&0xFF))
 		{
-			for(i=k;i<(899-10);i++)
+			for(i=k;i<(MAX_DEV_MEM-1-10);i++)
 			{	
 				p[i] = p[i+10];
 			}
-			for(i=899-10;i<899;i++)
+			for(i=MAX_DEV_MEM-1-10;i<MAX_DEV_MEM-1;i++)
 			{
 				p[i]=0x00;
 			}
-			p[899] = p[899]-1;
+			p[MAX_DEV_MEM-1] = p[MAX_DEV_MEM-1]-1;
 			if(GW_OK == erase_dev_cfg())
 			{
-				if(GW_OK == save_dev_cfg(p, 900))
+				if(GW_OK == save_dev_cfg(p, MAX_DEV_MEM))
 				{	
 					list_for_each_entry(node, dev_list_head, dev_head)
 					{
@@ -390,7 +314,7 @@ int del_dev_info(char* sn, DEV_NODE_S *node, LIST_HEAD_T *dev_list_head)
 		}
 		else
 		{
-			LogE_Prefix("delelte device is not be found in file \r\n");
+			LogE_Prefix("Delelte device is not be found in file \r\n");
 			return GW_ERR;
 		}
 	}
@@ -406,6 +330,7 @@ int product_id_adapt(DEV_INFO_S* dev)
 {
 	char *productID=NULL;
 	RETURN_IF_NULL(dev, GW_NULL_PARAM);
+	LogD_Prefix("dev->child_info.zigbee.type is 0x%04x\r\n",dev->child_info.zigbee.type);
 	switch(dev->child_info.zigbee.type)
 	{
 		case 0:
@@ -456,14 +381,14 @@ int product_id_adapt(DEV_INFO_S* dev)
 			{
 				break;
 			}
-		case DEV_SIXWAY_AIR:
+		case DEV_SCENE_PANEL:
 			{
-				productID = DEV_PRODUCT_SIXWAY_AIR;
+				productID = DEV_PRODUCT_SCENE;
 				break;
 			}
-			default:
-				LogI_Prefix("the productid is not be found!\r\n");
-				break;
+		default:
+			LogI_Prefix("The productid is not be found!\r\n");
+			break;
 	}
 	RETURN_IF_NULL(productID, GW_NULL_PARAM);
 	agent_strncpy(dev->product_id, productID, strlen(productID));
@@ -471,7 +396,7 @@ int product_id_adapt(DEV_INFO_S* dev)
 	agent_strncpy(dev->soft_ver, "1.1.01", strlen("1.1.01"));
 	agent_strncpy(dev->gw_sn, get_gw_info()->sn, strlen(get_gw_info()->sn));
 	agent_strncpy(dev->ip,get_gw_info()->ip , strlen(get_gw_info()->ip));
-	LogI_Prefix("000000000000000000000000sn is %s\r\ngw_sn is %s\r\n",dev->sn,dev->gw_sn);
+	LogD_Prefix("The sn is %s gw_sn is %s\r\n",dev->sn,dev->gw_sn);
 	return GW_OK;
 }
 
@@ -482,7 +407,7 @@ int product_id_adapt(DEV_INFO_S* dev)
 */
 int read_dev_info(void)//
 {
-	uint8_t pp[900];
+	uint8_t pp[MAX_DEV_MEM];
 	uint8_t data[10];
 	uint8_t number=0;
 	int i;
@@ -491,9 +416,9 @@ int read_dev_info(void)//
 	int n;
 	int ret;
 	int sum=0;
-	LogI_Prefix("reboot first read file device data start.......... \r\n");
+	LogI_Prefix("Reboot first read file device data start.......... \r\n");
     ret = is_file_null();
-	memset(pp, 0, 900);
+	memset(pp, 0, MAX_DEV_MEM);
 	memset(data, 0, 10);
 	if (ret == 0)
   	{
@@ -504,20 +429,20 @@ int read_dev_info(void)//
     {
 		if (ret == 1)
 	 	{
-			read_dev_cfg(pp,900);
-			number=pp[899];
-			LogI_Prefix("Read file reboot number  is %02X ............. \r\n",pp[899]);
+			read_dev_cfg(pp,MAX_DEV_MEM);
+			number=pp[MAX_DEV_MEM-1];
+			LogI_Prefix("Read file reboot number  is %02X ............. \r\n",pp[MAX_DEV_MEM-1]);
 			for(n=0;n<8;n++)
 			{
 				sum=sum+pp[n];
 			}
-			if(sum == 0)//file内没有数据
+			if(sum == 0)//fileå†…æ²¡æœ‰æ•°æ®
 			{
 				if(number!=0)
 				{
 					erase_dev_cfg();
 				}	
-				LogD_Prefix("flash have no data.......... \r\n");
+				LogD_Prefix("File have no data.......... \r\n");
 				return GW_OK;	
 			}
 			else
@@ -541,16 +466,23 @@ int read_dev_info(void)//
 			
 					DEV_INFO_S* dev = NULL;
 					dev = (DEV_INFO_S*)malloc(sizeof(DEV_INFO_S));	
+					RETURN_IF_NULL(dev, GW_NULL_PARAM);
 			   		memset(dev, 0, sizeof(DEV_INFO_S));
-			    	if(NULL == dev)
-					{
-						return GW_ERR;
-					}
+					dev->offline_flag = 0;
 					dev->maxtime  = VC_MAX_TIME;
 					dev->overtime = dev->maxtime;
 					dev->child_info.zigbee.long_addr = psMessage->long_addr;
 					dev->child_info.zigbee.type = psMessage->type;
 					snprintf(dev->sn, SN_LEN, "%016lX", dev->child_info.zigbee.long_addr);
+					uint8_t mac[6]={0};
+					mac[0] = ((dev->child_info.zigbee.long_addr)>>16)&0xFF;
+					mac[1] = ((dev->child_info.zigbee.long_addr)>>24)&0xFF;
+					mac[2] = ((dev->child_info.zigbee.long_addr)>>32)&0xFF;
+					mac[3] = ((dev->child_info.zigbee.long_addr)>>40)&0xFF;
+					mac[4] = ((dev->child_info.zigbee.long_addr)>>48)&0xFF;
+					mac[5] = ((dev->child_info.zigbee.long_addr)>>56)&0xFF;
+					snprintf(dev->mac, sizeof(dev->mac), "%02x:%02x:%02x:%02x:%02x:%02x", \
+				mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 					LogD_Prefix("Creat list sn= is 0x%016lX ............. \r\n",dev->child_info.zigbee.long_addr);
 					LogD_Prefix("Creat list type= is 0x%02X ............. \r\n",dev->child_info.zigbee.type);
 					dev->child_info.zigbee.node_number = j ;//FROM 0
@@ -571,7 +503,7 @@ int read_dev_info(void)//
 			erase_dev_cfg();
 		}
 	}	
-  	LogI_Prefix("read file data ok,next start dongle sdk.......... \r\n");
+  	LogI_Prefix("Read file data ok,next start dongle sdk.......... \r\n");
   	return GW_OK;
 }
 
