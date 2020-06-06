@@ -53,31 +53,30 @@ int delete_panel(char *deviceId, int point)
 {
 	RETURN_IF_NULL(deviceId, GW_NULL_PARAM);
 	PANEL_NODE_S *node = NULL;
-	LIST_HEAD_T * node_next = NULL;
+	
+	panel_list_lock();
 	if(!list_empty(&panel_list_mng.panel_list_head))
 	{
-		node = list_entry((&panel_list_mng.panel_list_head)->next, typeof(*node), panel_head);
-		RETURN_IF_NULL(node, GW_NULL_PARAM);
-		while((&node->panel_head) != (&panel_list_mng.panel_list_head))
+		do
 		{
-			node_next = node->panel_head.next;
-			if((!strcmp(node->panel_info.devid, deviceId)) && (node->panel_info.point == point))
+			list_for_each_entry(node, (&panel_list_mng.panel_list_head), panel_head)
 			{
-				panel_list_lock();
-				LogI_Prefix("Del panel(%s) from list, point is %d, sn is %s, addDevid is %s, cmd is %s\r\n", \
-				deviceId, point, node->panel_info.sn, node->panel_info.addDevid, node->panel_info.cmd);
-				list_del(&node->panel_head);
-				free_panel_node(&node);
-				panel_list_unlock();
+				if((!strcmp(node->panel_info.devid, deviceId)) && (node->panel_info.point == point))
+				{
+					LogI_Prefix("Del panel(%s) from list, point is %d, sn is %s, addDevid is %s, cmd is %s\r\n", \
+					deviceId, point, node->panel_info.sn, node->panel_info.addDevid, node->panel_info.cmd);
+					list_del(&node->panel_head);
+					free_panel_node(&node);
+					break;
+				}
 			}
-			node = list_entry(node_next, typeof(*node), panel_head);
-			RETURN_IF_NULL(node, GW_NULL_PARAM);
-		}
+		}while((&node->panel_head) != (&panel_list_mng.panel_list_head));
 	}
 	else
 	{
 		LogI_Prefix("panel list is empty when delete\r\n");
 	}
+	panel_list_unlock();
 	return GW_OK;
 }
 

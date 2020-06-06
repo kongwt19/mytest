@@ -25,11 +25,12 @@ typedef enum _msg_type
 
 typedef struct mq_item {
 	LIST_HEAD_T msg_head;
-	time_t msg_time;
 	uint8_t *msg_buf;
 	int msg_size;
 	char sn[SN_LEN];
 	MSG_TYPE_E type;
+	uint64_t msg_time;
+	int retry_flag;
 }MQ_ITEM_S;
 
 typedef int (*MSG_PROCESS_UNIT)(uint8_t *buf, int size, char *sn, MSG_TYPE_E type);
@@ -41,6 +42,7 @@ typedef struct mq_mgr {
 	MSG_PROCESS_UNIT mq_func;
 	pthread_mutex_t mq_mutex;
 	pthread_cond_t mq_cond;
+	uint64_t tail_msg_timestamp;
 }MQ_MGR_S;
 
 /**

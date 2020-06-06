@@ -40,7 +40,7 @@ int main(int argc, char **argv)
 	DEV_INFO_S gw;
 
 	memset(&gw, 0, sizeof(gw));
-	strncpy(gw.sn, "TV_GW_5013956de2e2", sizeof(gw.sn));
+	strncpy(gw.sn, "TV_GW_5013956DE2E2", sizeof(gw.sn));
 	strncpy(gw.product_id, "SLIFE_GW0001_TVGW001", sizeof(gw.product_id));
 	strncpy(gw.soft_ver, "1.1.1", sizeof(gw.soft_ver));
 	strncpy(gw.ip, "192.168.1.10", sizeof(gw.ip));

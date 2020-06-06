@@ -22,7 +22,7 @@ static int prase_plug_info(char *sn, uint32_t ep_id, char *data);
 static int prase_curtain_info(char *sn, uint32_t ep_id, char *data);
 static void set_network_value(int val);
 static int get_network_value(void);
-
+//static int creat_net_flag = 0;
 
 static int g_network = -1;
 static int timescnt = 0;
@@ -109,6 +109,7 @@ int init_rex_sdk(char *name)
  * return: 0成功,否则-1
  * note: none
  */
+#ifndef REX_ENABLE
 int device_data_report(char *sn, uint32_t ep_id, uint16_t data_type, char *data)
 {
 	int ret = GW_OK;
@@ -116,6 +117,12 @@ int device_data_report(char *sn, uint32_t ep_id, uint16_t data_type, char *data)
 
 	RETURN_IF_NULL(sn, GW_NULL_PARAM);
 	RETURN_IF_NULL(data, GW_NULL_PARAM);
+
+	if(data_type == NET_INFO)
+	{
+		//creat_net_flag = GW_NET_FAIL;
+		report_gw_status();
+	}
 
 	//sn地址存在则上报zigbee数据，不存在则不上报
 	ptr = get_dev_info(sn);
@@ -182,7 +189,7 @@ int device_data_report(char *sn, uint32_t ep_id, uint16_t data_type, char *data)
 	
 	return ret;
 }
-
+#endif
 /**
  * call_back_report_state_data_cb
  * 下发控制数据函数
@@ -190,7 +197,7 @@ int device_data_report(char *sn, uint32_t ep_id, uint16_t data_type, char *data)
  * return: 0成功,否则-1
  * note: none
  */
-int controlZigbeeDevice(char *sn, uint32_t ep_id, USER_CONTROL_OPTION_E type, DItem pDes)
+int ctl_zig_dev(char *sn, uint32_t ep_id, USER_CONTROL_OPTION_E type, DItem pDes)
 {
 	unsigned short cmd = 0;
 	char *dev_id = sn;
@@ -232,8 +239,9 @@ int controlZigbeeDevice(char *sn, uint32_t ep_id, USER_CONTROL_OPTION_E type, DI
 		case user_creat_net:
 		{
 			dev_id = "0000000000000000";
-			cmd = ZIGBEE_CREAT_NET;
+			cmd = ZIGBEE_CREAT_NET_S;
 			snprintf(conmand_message, JSON_MAX_LEN, "{}");
+			set_network_value(JOIN_NETWORK_CLOSE);
 			break;
 		}
 		case user_curtain_on:
@@ -278,7 +286,7 @@ int controlZigbeeDevice(char *sn, uint32_t ep_id, USER_CONTROL_OPTION_E type, DI
 		}
 		case user_clear_all_devices:
 		{
-			dev_id = "FFFFFFFFFFFFFFFF";
+			dev_id = "0000000000000000";
 			cmd = ZIGBEE_CLEAR_DEVICE;
 			snprintf(conmand_message, JSON_MAX_LEN, "{}");
 			break;
@@ -381,7 +389,6 @@ int device_join_net_report(char *sn, char *type)
 
 	return GW_OK;
 }
-
 /**
  * device_online_report
  * 设备上报上线消息函数
@@ -452,17 +459,24 @@ int set_network_sta(void)
         {
         	timestamp = get_ssecond();
         	timescnt++;
-        	LogD_Prefix("==============join network start cnt = %d==============\r\n", timescnt);
+        	LogD_Prefix("==============join network start, timescnt = %d, systemtime = %d==============\r\n", timescnt,timestamp);
         }
 		if(timescnt > 1)
 		{
 			timescnt = 0;
+			timestamp = 0;
 			set_network_value(JOIN_NETWORK_CLOSE);
 			report_gw_status();
 			LogI_Prefix("==========JOIN_NETWORK_CLOSE: %d========\r\n", g_network);
 		}
     }
-
+	else
+	{
+		timescnt = 0;
+		timestamp = 0;
+	}
+	
+	
     return GW_OK;
 }
 
@@ -486,17 +500,17 @@ static void setSensor(DEV_INFO_S *ptDevice, const char *sn, const char *productI
 {
 	uint8_t mac[6]={0};
 	memset(ptDevice, 0, sizeof(DEV_INFO_S));
-	agent_strncpy(ptDevice->sn, sn, strlen(sn));
-	agent_strncpy(ptDevice->product_id, productID, strlen(productID));
+	AGENT_STRNCPY(ptDevice->sn, sn, strlen(sn));
+	AGENT_STRNCPY(ptDevice->product_id, productID, strlen(productID));
 	ptDevice->child_info.zigbee.type = type;
 	ptDevice->child_info.zigbee.long_addr = laddr;
 	string_processor_hex_str_to_byte(sn, strlen(sn), mac);
 	snprintf(ptDevice->mac, sizeof(ptDevice->mac), "%02x:%02x:%02x:%02x:%02x:%02x", \
 				mac[5], mac[4], mac[3], mac[2], mac[1], mac[0]);
 	ptDevice->conn_type = CONN_TYPE_ZIGBEE;
-	agent_strncpy(ptDevice->soft_ver, "1.1.01", strlen("1.1.01"));
-	agent_strncpy(ptDevice->gw_sn, get_gw_info()->sn, strlen(get_gw_info()->sn));
-	agent_strncpy(ptDevice->ip,get_gw_info()->ip , strlen(get_gw_info()->ip));
+	AGENT_STRNCPY(ptDevice->soft_ver, "1.1.01", strlen("1.1.01"));
+	AGENT_STRNCPY(ptDevice->gw_sn, get_gw_info()->sn, strlen(get_gw_info()->sn));
+	AGENT_STRNCPY(ptDevice->ip,get_gw_info()->ip , strlen(get_gw_info()->ip));
 	ptDevice->maxtime = VC_MAX_TIME;
 	ptDevice->overtime= ptDevice->maxtime;
 	ptDevice->offline_flag = 0;
@@ -766,20 +780,33 @@ int get_joinnet_state(cJSON *data, char *sn)
 				return GW_ERR;
 			}
 
+		/*	if(creat_net_flag == GW_NET_SUCCESS)
+			{
+				pDes.times = time->valueint;
+				creat_net_flag = GW_NET_FAIL;
+				cmd = user_creat_net;
+				ev_point = 1;
+				ctl_zig_dev(sn, ev_point, cmd, &pDes);
+				ctl_zig_dev(sn, ev_point, cmd, &pDes);
+			}*/
+
 			LogD_Prefix("time->valueint is %d\r\n",time->valueint);
 			pDes.times = time->valueint;
 			ev_point = 1;
 			LogD_Prefix("Send msf to Control Zigbee Device1: sn = %s, ev_point = %d, cmd_type = %d, pDes = %d\r\n", sn, ev_point, cmd_type, pDes.times);
-			controlZigbeeDevice(sn, ev_point, cmd_type, &pDes);
+			ctl_zig_dev(sn, ev_point, cmd_type, &pDes);
 		}
 		else
 		{
 			if(0 == strcmp(method->valuestring ,"delete_gateway"))
-			{	
+			{
+				ev_point = 1;
+				LogD_Prefix("Send msf to Control Zigbee Device1: sn = %s, ev_point = %d, cmd_type = %d, pDes = %d\r\n", sn, ev_point, cmd_type, pDes.times);
 				LogI_Prefix("Delete gateway data!\n");
-				reinit_dev_list();
+				clear_child_by_type(CONN_TYPE_ZIGBEE);
 				erase_dev_cfg();
-				
+				//creat_net_flag = GW_NET_SUCCESS;
+				ctl_zig_dev(sn, ev_point, user_creat_net, &pDes);
 			}
 		}
 	}
@@ -826,7 +853,7 @@ int get_light_state(cJSON *data, char *sn)
 		
 		ev_point = point->valueint;
 		LogD_Prefix("Send msf to Control Zigbee Device1: sn = %s, ev_point = %d, cmd_type = %d, pDes = %d\r\n", sn, ev_point, cmd_type, pDes.state);
-	    controlZigbeeDevice(sn, ev_point, cmd_type, &pDes);
+	    ctl_zig_dev(sn, ev_point, cmd_type, &pDes);
 	}		
 	return GW_OK;
 }
@@ -877,7 +904,7 @@ int get_plug_state(cJSON *data, char *sn)
 	    
 		ev_point = 1;
 		LogD_Prefix("Send msf to Control Zigbee Device1: sn = %s, ev_point = %d, cmd_type = %d, pDes = %d\r\n", sn, ev_point, cmd_type, pDes.state);
-	    controlZigbeeDevice(sn, ev_point, cmd_type, &pDes);
+	    ctl_zig_dev(sn, ev_point, cmd_type, &pDes);
 	}
 	
 	return GW_OK;
@@ -938,7 +965,7 @@ int get_curtain_state(cJSON *data, char *sn)
 
 		ev_point = point->valueint;
 		LogD_Prefix("Send msf to Control Zigbee Device1: sn = %s, ev_point = %d, cmd_type = %d, pDes = %d\r\n", sn, ev_point, cmd_type, pDes.state);
-		controlZigbeeDevice(sn, ev_point, cmd_type, &pDes);
+		ctl_zig_dev(sn, ev_point, cmd_type, &pDes);
 	}
 
 	return GW_OK;
@@ -951,6 +978,7 @@ int get_curtain_state(cJSON *data, char *sn)
  * return: 无
  * note: none
  */
+#ifndef REX_ENABLE
 void ctl_dev_clear_net(char *sn)
 {
 	int ev_point;
@@ -961,9 +989,9 @@ void ctl_dev_clear_net(char *sn)
 	pDes.state = 255;
 	ev_point = 1;
 	LogD_Prefix("Send msf to Control Zigbee Device1: sn = %s, ev_point = %d, cmd_type = %d, pDes = %d\r\n", sn, ev_point, cmd_type, pDes.state);
-	controlZigbeeDevice(sn, ev_point, cmd_type, &pDes);
+	ctl_zig_dev(sn, ev_point, cmd_type, &pDes);
 }
-
+#endif
 /**
  * ctl_all_dev_clear_net
  * 清除所有设备的zigbee网络
@@ -983,7 +1011,7 @@ void ctl_all_dev_clear_net(void)
 	pDes.state = 255;
 	ev_point = 255;
 	LogD_Prefix("Send msf to Control Zigbee Device1: sn = %s, ev_point = %d, cmd_type = %d, pDes = %d\r\n", sn, ev_point, cmd_type, pDes.state);
-	controlZigbeeDevice(sn, ev_point, cmd_type, &pDes);
+	ctl_zig_dev(sn, ev_point, cmd_type, &pDes);
 }
 
 /**

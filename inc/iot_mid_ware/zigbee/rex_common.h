@@ -29,7 +29,8 @@
 #define JOIN_NETWORK_OPEN						0
 #define JOIN_NETWORK_CLOSE						-1
 
-
+#define GW_NET_FAIL						        0
+#define GW_NET_SUCCESS						    1
 
 /* 设备生产ID */
 #define DEV_PRODUCT_GATEWAY						"SLIFE_GW0001_hyzn002"
@@ -46,14 +47,6 @@
 #define DEV_PRODUCT_FOURWAY_LIGHT				"SMH01_SWTH01_hyzn004"
 
 #define DEV_PRODUCT_ONEWAY_CURTAIN				"SMH01_BLIND1_hyzn001"
-
-
-#define agent_strncpy(dest,src,n)\
-do \
-{	\
-	strncpy(dest, src, n);\
-	dest[n] = '\0';\
-} while (0);
 
 
 typedef struct data_item{
@@ -132,6 +125,7 @@ typedef enum
 	ZIGBEE_SET_NET					= 0x0102,   //设置网络信息
 	ZIGBEE_CREAT_NET				= 0x01F0,   //创建网络
 	ZIGBEE_SET_FACTOR				= 0x0124,   //恢复出厂设置
+	ZIGBEE_CREAT_NET_S				= 0x01F6,   //随机创建网络
 
 	//插座命令
 	ZIGBEE_PLUG_SET_STATE			= 0x0105,   //插座状态
@@ -232,7 +226,7 @@ typedef enum
 
 int init_rex_sdk(char *name);
 int device_data_report(char *sn, uint32_t ep_id, uint16_t data_type, char *data);
-int controlZigbeeDevice(char *sn, uint32_t ep_id, USER_CONTROL_OPTION_E type, DItem pDes);
+int ctl_zig_dev(char *sn, uint32_t ep_id, USER_CONTROL_OPTION_E type, DItem pDes);
 
 int device_join_net_report(char *sn, char *type);
 int device_online_report(char *sn, DEVICE_ONLINE_TYPE_E type);

@@ -134,6 +134,7 @@ int init_iot_mid_ware(void)
 	}
 
 	//2 register gateway
+	/*
 	while(TRUE)
 	{
 		if(GW_OK == cdc_regist(get_gw_info()))
@@ -141,7 +142,7 @@ int init_iot_mid_ware(void)
 			break;
 		}
 		sleep_ms(200);
-	}
+	}*/
 	
 	//3 Update gateway information
 	cdc_update(get_gw_info());

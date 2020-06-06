@@ -34,8 +34,8 @@ typedef struct _panellistMng
 
 typedef struct method_transfer
 {
-	const char * old_method;
-	const char * new_method;
+	char * old_method;
+	char * new_method;
 }METHOD_TRANSFER;
 
 int init_panel_list(void);

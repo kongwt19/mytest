@@ -9,7 +9,8 @@ extern "C" {
 #include <pthread.h>
 #include "defines.h"
 
-#define MAX_DEV_NUM 200
+#define MAX_ZIGBEE_NUM 256
+#define MAX_BLE_NUM 128
 
 typedef struct _zigbee_info
 {
@@ -71,7 +72,8 @@ typedef struct _devListMng
 {
 	LIST_HEAD_T	dev_list_head;
 	int dev_num;
-	int max_dev_num;
+	int max_zigbee_num;
+	int max_ble_num;
 	int zigbee_num;
 	int ble_num;
 	int wifi_num;
@@ -150,7 +152,7 @@ DEV_INFO_S *get_gw_info(void);
 * @param
 * @return 
 */
-int init_dev_list(int size);
+int init_dev_list(int max_zigbee, int max_ble);
 /**
 * Update the device data to list
 * @param dev
@@ -158,11 +160,17 @@ int init_dev_list(int size);
 */
 int update_dev(DEV_INFO_S *dev);
 /**
-* reset the device list
+* Clear child list by connection type
 * @param dev
 * @return 
 */
-int reinit_dev_list(void);
+int clear_child_by_type(CONN_TYPE_E child_type);
+/**
+* check  dev list return the offline dev
+* @param 
+* @return 
+*/
+void get_offline_dev(char *sn, DEV_NODE_S **dev_nd, uint16_t uncheck_dev_type);
 
 #ifdef __cplusplus
 }

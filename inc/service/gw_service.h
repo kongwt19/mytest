@@ -56,6 +56,8 @@ int dev_report_callback(char *sn, uint32_t ep_id, uint16_t data_type, char *data
 
 int report_gw_status(void);
 
+int dev_offline_check(void);
+
 int process_mqtt_msg(char *msg, int len, char **resp, int *resp_len);
 
 int process_local_msg(char *msg, int len, char **resp, int *resp_len);

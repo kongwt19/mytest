@@ -12,9 +12,68 @@
 #include "cJSON.h"
 #include "gw_service.h"
 #include "biz_plf.h"
+#include "platform.h"
 
 #define MSG_LEN 512
+#define DEV_NUM 128
 static pthread_t udp_pid;
+#define STR_LEN 16
+#define SN_PREFIX "AAAACCDDEEFFF"
+
+char *  GenerateStr(int * index_num)
+{
+    int flag = (*index_num);
+    char * str = (char *)malloc(STR_LEN + 1);
+	memset(str, 0, STR_LEN + 1);
+	strcpy(str, SN_PREFIX);
+	char num[4];
+	bzero(num,4); 
+	sprintf(num, "%03d",flag+1);
+    (*index_num)++;
+	strcat(str, num);
+    return str;
+}
+
+int devs_online()
+{
+    char *sn;
+    char *type;
+    int index_num = 0;
+    int ret = GW_ERR;
+    int i = 1;
+    for(; i <= DEV_NUM; i++)
+    {
+        sn = GenerateStr(&index_num);
+        if(i <= 21)
+        {
+            type = "1001";
+        }
+        else if(i > 21 && i <= 42)
+        {
+            type = "1101";
+        }
+        else if(i > 42 && i <= 63)
+        {
+            type = "1102";
+        }
+        else if(i > 63 && i <= 84)
+        {
+            type = "1103";
+        }
+        else if(i > 84 && i <= 105)
+        {
+            type = "1304";
+        }
+        else if(i > 105 && i <= 128)
+        {
+            type = "1312";
+        }
+        LogI_Prefix("dev(%s), the type is %s online\n", sn, type);
+        ret = device_join_net_report(sn, type);
+        sleep_s(2);
+    }
+    return ret;
+}
 
 int prase_udp_meg(char *msg)
 {
@@ -28,12 +87,7 @@ int prase_udp_meg(char *msg)
     method_node = cJSON_GetObjectItem(root, "method");
 	if((method_node != NULL) && (!(strcmp(method_node->valuestring, "online"))))
 	{
-	    deviceId = cJSON_GetObjectItem(root, "deviceId");
-		RETURN_IF_NULL(deviceId, GW_NULL_PARAM);
-        cJSON * type_node = NULL;
-		type_node = cJSON_GetObjectItem(root, "type");
-		RETURN_IF_NULL(type_node, GW_NULL_PARAM);
-		ret = device_join_net_report(deviceId->valuestring, type_node->valuestring);
+		ret = devs_online();
 	}
     else if((method_node != NULL) && (!(strcmp(method_node->valuestring, "offline"))))
     {
@@ -87,8 +141,13 @@ void *udp_rev_msg(void *arg)
     while(1)
     {
         char buf[MSG_LEN];
-        int len = recvfrom(sockfd,&buf,sizeof(buf)-1,0,(struct sockaddr*)&cli,&len);
-		buf[len] = '\0';
+        int rcv_len = 0;
+        do
+        {
+            LogI_Prefix("rcv the msg success\n");
+            rcv_len = recvfrom(sockfd,&buf,sizeof(buf)-1,0,(struct sockaddr*)&cli,&len);
+        } while (rcv_len <= 0);
+		buf[rcv_len] = '\0';
         if(prase_udp_meg(buf) != GW_OK)
         {
             LogI_Prefix("prase the msg (%s) error\n", buf);

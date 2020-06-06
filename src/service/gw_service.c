@@ -2,21 +2,19 @@
 #include "error_code.h"
 #include "dev_mng.h"
 #include "gw_service.h"
-#include "msg_mng.h"
 #include "rex_common.h"
 #include "cJSON.h"
 #include "dev_cfg.h"
 #include "biz_plf.h"
 #include "mqtt.h"
 #include "iot_mid_ware.h"
-#include "pthread.h"
 #include "scene_panel.h"
 
 #define TIME 6
 
 static pthread_t time_pid;
-static int flag = USB_ADD;
-static int status = USB_ADD;
+static int usb_flag = USB_ADD;
+static int usb_status = USB_ADD;
 
 static ONLINE_CALLBACK online_cb;
 static OFFLINE_CALLBACK offline_cb;
@@ -44,6 +42,19 @@ void reg_usb_port_callback(USB_PORT_CHECK cb)
 {
 	return;
 }
+int device_data_report(char *sn, uint32_t ep_id, uint16_t data_type, char *data)
+{
+	return 0;
+}
+void ctl_dev_clear_net(char *sn)
+{
+	return;
+}
+/*
+int device_join_net_report(char *sn, char *type)
+{
+	return 0;
+}*/
 #endif
 
 void dev_list_handle()
@@ -59,7 +70,7 @@ void dev_list_handle()
 		int i;
 		for(i = 0; i < dev_num; i++)
 		{
-			if(status == USB_ADD)
+			if(usb_status == USB_ADD)
 			{
 				if(cdc_slave_device_online(&dev_list[i]) != 0)
 				{
@@ -85,25 +96,25 @@ void dev_list_handle()
 void *time_func(void *arg)
 {
 	LogI_Prefix("time_func start!\n");
-	int tmp_flag = flag;
-	int time  = TIME;
-	while(time > 0)
+	int tmp_flag = usb_flag;
+	int timing  = TIME;
+	while(timing > 0)
 	{
-		if(tmp_flag != flag)
+		if(tmp_flag != usb_flag)
 		{
-			tmp_flag = flag;
-			time = TIME;
+			tmp_flag = usb_flag;
+			timing = TIME;
 		}
 		else
 		{
-			time--;
+			timing--;
 			sleep_s(1);
 		}
 	}
 
-	if(tmp_flag != status)
+	if(tmp_flag != usb_status)
 	{
-		status = tmp_flag;
+		usb_status = tmp_flag;
 		dev_list_handle();
 	}
 	time_pid = 0;
@@ -113,7 +124,7 @@ void *time_func(void *arg)
 
 void usb_port_callback(USB_PORT_STA_E sta)
 { 	
-	flag = sta;
+	usb_flag = sta;
 	if( time_pid == 0)
 	{
 		pthread_attr_t attr;
@@ -276,11 +287,17 @@ int dev_offline(char *sn)
 		{
 			offline_cb(sn, dev->product_id);
 		}
+		// del from dev list
+		del_dev(sn);
 		report_gw_status();
 	}
+	else
+	{
+		// del from dev list
+		del_dev(sn);
+	}
 	
-	// del from dev list
-	ret = del_dev(sn);
+
 	FREE_POINTER(dev);
 	
 	return ret;
@@ -456,3 +473,34 @@ int process_http_msg(uint8_t *buf, int size, char *sn, MSG_TYPE_E type)
 	return http_send(sn, type, (char*)buf, size);
 }
 
+void *offline_check(void *arg)
+{
+	DEV_NODE_S *nd = NULL;
+	char sn[SN_LEN];
+	memset(sn, 0, SN_LEN);
+    while(1)
+    {
+		sleep_ms(1000);
+		get_offline_dev(sn, &nd, DEV_GATEWAY);
+		if(strlen(sn)!=0 && NULL != nd)
+		{	
+			nd->dev_info.offline_flag =1;
+			LogD_Prefix("A device is offline, the device sn is %s\r\n", sn);
+			cdc_slave_device_offline(sn);
+			memset(sn, 0, SN_LEN);
+		}
+		
+    }
+    return NULL;
+}
+
+int dev_offline_check(void)
+{
+    LogI_Prefix("Start de_offline_check!!\n");
+	pthread_attr_t check;
+	pthread_t check_threadId;
+	pthread_attr_init(&check);
+	pthread_attr_setdetachstate(&check, PTHREAD_CREATE_DETACHED);
+	pthread_create(&check_threadId, &check, offline_check, NULL);
+	return GW_OK;
+}

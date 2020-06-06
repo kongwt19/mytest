@@ -57,6 +57,15 @@ do\
 } while (0)
 #endif
 
+#ifndef AGENT_STRNCPY
+#define AGENT_STRNCPY(dest,src,n)\
+do \
+{	\
+	strncpy(dest, src, n);\
+	dest[n] = '\0';\
+} while (0);
+#endif
+
 #ifndef MALLOC_ERROR
 #define MALLOC_ERROR(p) \
 if (NULL == p) {\

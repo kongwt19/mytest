@@ -1,8 +1,12 @@
 #include "defines.h"
 #include "error_code.h"
 #include "msg_mng.h"
+#include "mqtt.h"
+#include <math.h>
 
 static MQ_MGR_S msg_queue;
+#define DELAY_SPACE 500
+#define MAX_RETRY 12
 
 void *msg_process_func(void *arg);
 
@@ -28,6 +32,7 @@ int init_msg_queue(int size, MSG_PROCESS_UNIT msg_func)
 	
 	memset(&msg_queue, 0, sizeof(msg_queue));
 	msg_queue.mq_item_num = 0;
+	msg_queue.tail_msg_timestamp = 0;
 	msg_queue.max_item_num = (size > MAX_MQ_SIZE)?MAX_MQ_SIZE:size;
 	msg_queue.mq_func = msg_func;
 	INIT_LIST_HEAD(&msg_queue.mq_head);
@@ -57,10 +62,20 @@ int add_msg(MQ_ITEM_S *item)
 	int ret = GW_ERR;
 
 	RETURN_IF_NULL(item, GW_NULL_PARAM);
-	
+
 	mq_lock();
 	if(msg_queue.mq_item_num < msg_queue.max_item_num)
 	{
+		uint64_t timestamp = DELAY_SPACE * (int)pow(2, item->retry_flag);
+		if(msg_queue.tail_msg_timestamp == 0)
+		{
+			msg_queue.tail_msg_timestamp = msg_time_stamp() + timestamp;
+		}
+		else
+		{
+			msg_queue.tail_msg_timestamp += timestamp;
+		}
+		item->msg_time = msg_queue.tail_msg_timestamp;//Record timestamp
 		list_add(&item->msg_head, &msg_queue.mq_head);
 		msg_queue.mq_item_num ++;
 		ret = GW_OK;
@@ -107,7 +122,7 @@ int post_to_queue(uint8_t *buf, int size, char *sn, MSG_TYPE_E type)
 	strncpy(item->sn, sn, SN_LEN);
 	item->type = type;
 	item->msg_size = size;
-	item->msg_time = time(NULL);//Record timestamp
+	item->retry_flag = 0;
 	INIT_LIST_HEAD(&item->msg_head);
 
 	ret = add_msg(item);
@@ -129,10 +144,24 @@ MQ_ITEM_S *dequeue_msg(void)
 	{
 		//Get the first item from queue
 		item = list_entry(msg_queue.mq_head.prev, MQ_ITEM_S, msg_head);
-		list_del(&item->msg_head);
-		msg_queue.mq_item_num --;
-		LogI_Prefix("Del item from queue, %d in queue\n", msg_queue.mq_item_num);
+		uint64_t now_time_stamp = msg_time_stamp();
+		if(now_time_stamp >= item->msg_time)
+		{
+			list_del(&item->msg_head);
+			msg_queue.mq_item_num --;
+			LogI_Prefix("Del item from queue, %d in queue\n", msg_queue.mq_item_num);
+		}
+		else
+		{
+			item = NULL;
+		}
+		
 	}
+	else
+	{
+		msg_queue.tail_msg_timestamp = 0;
+	}
+	
 	mq_unlock();
 
 	return item;
@@ -172,6 +201,11 @@ void *msg_process_func(void *arg)
 			}
 			else
 			{
+				item->retry_flag++;
+				if(item->retry_flag > MAX_RETRY)
+				{
+					item->retry_flag = 0;
+				}
 				add_msg(item);
 			}
 		}

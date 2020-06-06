@@ -6,7 +6,9 @@
 
 int init_mid_ware(void)
 {
-	init_dev_list(128);
+	init_dev_list(128, 64);
+
+	dev_offline_check();
 
 	init_msg_queue(256, process_http_msg);
 

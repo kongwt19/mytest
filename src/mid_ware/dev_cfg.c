@@ -391,11 +391,11 @@ int product_id_adapt(DEV_INFO_S* dev)
 			break;
 	}
 	RETURN_IF_NULL(productID, GW_NULL_PARAM);
-	agent_strncpy(dev->product_id, productID, strlen(productID));
+	AGENT_STRNCPY(dev->product_id, productID, strlen(productID));
 	//agent_strncpy(dev->mac, "AA:BB:CC:DD:EE:FF", strlen("AA:BB:CC:DD:EE:FF"));
-	agent_strncpy(dev->soft_ver, "1.1.01", strlen("1.1.01"));
-	agent_strncpy(dev->gw_sn, get_gw_info()->sn, strlen(get_gw_info()->sn));
-	agent_strncpy(dev->ip,get_gw_info()->ip , strlen(get_gw_info()->ip));
+	AGENT_STRNCPY(dev->soft_ver, "1.1.01", strlen("1.1.01"));
+	AGENT_STRNCPY(dev->gw_sn, get_gw_info()->sn, strlen(get_gw_info()->sn));
+	AGENT_STRNCPY(dev->ip,get_gw_info()->ip , strlen(get_gw_info()->ip));
 	LogD_Prefix("The sn is %s gw_sn is %s\r\n",dev->sn,dev->gw_sn);
 	return GW_OK;
 }

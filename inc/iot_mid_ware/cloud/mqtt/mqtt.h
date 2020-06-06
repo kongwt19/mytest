@@ -26,4 +26,6 @@ int msg_published(char * topic, char * payload);
 
 int mqtt_send_contrl(char *dst_sn, char *info, int len, char *topic);
 
+uint64_t msg_time_stamp(void);
+
 #endif
